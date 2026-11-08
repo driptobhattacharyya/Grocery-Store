@@ -1,0 +1,26 @@
+{
+  // Worker name; also the default *.workers.dev subdomain if one is enabled.
+  "name": "grocery-store",
+
+  // Pins the Workers runtime behaviour. Keep it at or after the date the
+  // project was set up, and bump it deliberately.
+  "compatibility_date": "2026-11-01",
+
+  // No "main" entry: this is an assets-only Worker. Cloudflare serves the
+  // files in ./dist directly and runs no Worker code.
+  "assets": {
+    // The Vite build output (`npm run build`). Relative to this file.
+    "directory": "./dist",
+    // Unknown paths return index.html so Vue Router's client-side routes work.
+    "not_found_handling": "single-page-application"
+  },
+
+  // Attach the Worker to the custom domain. The zone driptobhattacharyya.com
+  // must already be on Cloudflare, and the API token needs Workers Routes Edit.
+  "routes": [
+    {
+      "pattern": "grocery-store.driptobhattacharyya.com",
+      "custom_domain": true
+    }
+  ]
+}

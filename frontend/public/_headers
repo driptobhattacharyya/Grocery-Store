@@ -1,0 +1,28 @@
+# Cloudflare static-assets headers. Vite copies public/ into dist/, so this
+# file is served from the dist root. Path lines start at column 0; header
+# lines are indented by two spaces.
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  # frame-src: Turnstile runs in an iframe from challenges.cloudflare.com. The
+  # e-mail preview is a sandboxed srcdoc iframe. srcdoc documents inherit the
+  # parent page's CSP, so the frame's own styles and images are checked against
+  # this policy too. Keep the e-mail HTML within style-src and img-src.
+  # connect-src: the API is cross-origin on onrender.com. If the Render URL
+  # changes, update this line and rebuild.
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.onrender.com https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+
+# Hashed build assets never change, so cache them for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The HTML shell must be revalidated so new deploys are picked up.
+/index.html
+  Cache-Control: no-cache
+
+/
+  Cache-Control: no-cache
