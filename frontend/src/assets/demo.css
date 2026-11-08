@@ -234,10 +234,13 @@
   color: #fff;
   background: #495057;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  /* A fixed pill always sits over some page content (at 390 px it covered a
+     card button): let clicks fall through to what is underneath. */
+  pointer-events: none;
 }
 .server-pill.ready { background: var(--demo-green); }
 .server-pill.unreachable { background: #b02a37; }
-.server-pill button { background: rgba(255, 255, 255, 0.2); color: #fff; border: 0; border-radius: 0.8rem; padding: 0 0.6rem; }
+.server-pill button { pointer-events: auto; background: rgba(255, 255, 255, 0.2); color: #fff; border: 0; border-radius: 0.8rem; padding: 0 0.6rem; }
 .pill-fade-enter-active, .pill-fade-leave-active { transition: opacity 0.4s, transform 0.4s; }
 .pill-fade-enter-from, .pill-fade-leave-to { opacity: 0; transform: translateY(8px); }
 

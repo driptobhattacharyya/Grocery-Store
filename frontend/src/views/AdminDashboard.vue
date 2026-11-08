@@ -3,8 +3,8 @@
   <div>
     <br />
     <h1 class="mb-4">Admin Dashboard</h1>
-    <div class="row">
-      <div class="col-4">
+    <div class="row mx-0">
+      <div class="col-12 col-md-4 mb-3">
         <div class="card">
           <div class="card-body">
             <h5 class="card-title">Create a New Product</h5>
@@ -12,7 +12,7 @@
           </div>
         </div>
       </div>
-      <div class="col-4">
+      <div class="col-12 col-md-4 mb-3">
         <div class="card">
           <div class="card-body">
             <h5 class="card-title">Create a New Category</h5>
