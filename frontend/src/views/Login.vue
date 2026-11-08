@@ -38,6 +38,7 @@
 import axios from "axios";
 import "@/assets/style.css";
 import { logout } from "@/auth";
+import { rememberEmail } from "@/demo";
 
 // Only follow same-origin, path-only redirects ("/x", never "//host", "/\\host" or "http://").
 function safeRedirect(value, fallback) {
@@ -67,6 +68,7 @@ export default {
           password: this.password,
         });
         logout(); // drop any keys left by a previous role
+        rememberEmail(this.email); // offered as "My account" in the demo toolbar
         sessionStorage.setItem("accessToken", response.data.access_token);
         if (response.data.is_manager) {
           sessionStorage.setItem("is_manager", true);
@@ -74,7 +76,7 @@ export default {
         } else {
           sessionStorage.setItem("signed", true);
           sessionStorage.setItem("name", response.data.name);
-          this.$router.push(safeRedirect(this.$route.query.redirect, "/"));
+          this.$router.push(safeRedirect(this.$route.query.redirect, "/shop"));
         }
       } catch (error) {
         this.error = errorMessage(error);

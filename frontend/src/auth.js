@@ -6,6 +6,15 @@
 
 const AUTH_KEYS = ["accessToken", "signed", "name", "is_manager", "admin"];
 
+// The demo sandbox the visitor is working in. It outlives log-in/log-out:
+// logging out of an account does not leave the sandbox.
+export const SANDBOX_KEY = "sandbox_id";
+
+export function getSandboxId() {
+  const id = read(SANDBOX_KEY);
+  return id && id !== "undefined" && id !== "null" ? id : null;
+}
+
 function read(key) {
   try {
     return window.sessionStorage.getItem(key);
@@ -40,7 +49,7 @@ export function getRole() {
 export function homeFor(role) {
   if (role === "admin") return "/admin/dashboard";
   if (role === "manager") return "/StoreManager/dashboard";
-  return "/";
+  return "/shop";
 }
 
 /** Login page that serves the given set of allowed roles. */

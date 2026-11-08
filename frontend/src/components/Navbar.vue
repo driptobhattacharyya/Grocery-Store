@@ -24,7 +24,7 @@
               >Home</a
             >
           </li>
-          <li class="nav-item dropdown" v-if="path == '/'">
+          <li class="nav-item dropdown" v-if="path == '/shop'">
             <a
               class="nav-link dropdown-toggle"
               href="#"
@@ -67,7 +67,7 @@
           </li>
           
 
-          <li class="nav-item dropdown" v-if="path == '/'">
+          <li class="nav-item dropdown" v-if="path == '/shop'">
             <a
               class="nav-link dropdown-toggle"
               href="#"
@@ -231,8 +231,8 @@ export default {
     async category_products(categoryID) {
       try {
         const response = await axios.get(`/api/category/${categoryID}`);
-        if (this.$route.path !== "/") {
-          await this.$router.push("/");
+        if (this.$route.path !== "/shop") {
+          await this.$router.push("/shop");
         }
         this.$emit("ChildEvent", response.data);
       } catch (error) {
@@ -263,19 +263,19 @@ export default {
       }
     },
     goHome() {
-      if (this.$route.path === "/") {
+      if (this.$route.path === "/shop") {
         window.location.reload();
       } else {
-        this.$router.push("/");
+        this.$router.push("/shop");
       }
     },
     logout() {
       logout();
       alert("Logged out successfully");
-      if (this.$route.path === "/") {
+      if (this.$route.path === "/shop") {
         window.location.reload();
       } else {
-        this.$router.push("/");
+        this.$router.push("/shop");
       }
     },
   },

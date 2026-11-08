@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { getRole, loginPathFor } from "../auth";
+import { getRole, getSandboxId, loginPathFor } from "../auth";
 
 // Every page is loaded on demand so the initial bundle only carries the shell.
+const Landing = () => import("../views/Landing.vue");
 const User_products = () => import("../components/User_products.vue");
 const Login = () => import("../views/Login.vue");
 const Signup = () => import("../views/Signup.vue");
@@ -14,7 +15,6 @@ const AddProduct = () => import("../components/AddProduct.vue");
 const AdminLogin = () => import("../components/AdminLogin.vue");
 const ManagerRequests = () => import("../views/ManagerRequests.vue");
 const StoreManagerDashboard = () => import("../views/StoreManagerDashboard.vue");
-const AboutView = () => import("../views/AboutView.vue");
 const NotFound = () => import("../views/NotFound.vue");
 
 const SHOPPER = { requiresAuth: true, roles: ["user"] };
@@ -23,8 +23,11 @@ const ADMIN = { requiresAuth: true, roles: ["admin"] };
 const STAFF = { requiresAuth: true, roles: ["manager", "admin"] };
 
 const routes = [
-  { path: "/", name: "home", component: User_products, meta: { title: "Shop" } },
-  { path: "/about", name: "about", component: AboutView, meta: { title: "About" } },
+  // The only public page: pick a role, which creates the demo sandbox.
+  { path: "/", name: "landing", component: Landing, meta: { title: "Explore the demo", public: true } },
+  // The shopper home (the product listing used to live at "/").
+  { path: "/shop", name: "home", component: User_products, meta: { title: "Shop" } },
+  { path: "/about", redirect: "/" },
   { path: "/login", name: "login", component: Login, meta: { title: "Log in" } },
   { path: "/signup", name: "signup", component: Signup, meta: { title: "Sign up" } },
   {
@@ -96,7 +99,7 @@ const routes = [
     path: "/:pathMatch(.*)*",
     name: "NotFound",
     component: NotFound,
-    meta: { title: "Page not found" },
+    meta: { title: "Page not found", public: true },
   },
 ];
 
@@ -108,6 +111,9 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const meta = to.meta || {};
+  // Every page except the landing page needs a demo sandbox (the API rejects
+  // requests without X-Sandbox-Id), including login and signup.
+  if (!meta.public && !getSandboxId()) return { path: "/" };
   if (!meta.requiresAuth) return true;
 
   const role = getRole();
@@ -116,7 +122,7 @@ router.beforeEach((to) => {
   }
   if (meta.roles && !meta.roles.includes(role)) {
     // Logged in, but this area belongs to another role.
-    return "/";
+    return "/shop";
   }
   return true;
 });

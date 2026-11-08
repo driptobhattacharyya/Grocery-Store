@@ -45,7 +45,8 @@
   </template>
   
   <script>
-import { getToken, logout } from "@/auth";
+import { logout } from "@/auth";
+import { downloadReport } from "@/report";
 
 export default {
   methods: {
@@ -59,29 +60,10 @@ export default {
     logout() {
       logout();
       alert("Logged out successfully");
-      this.$router.push("/");
+      this.$router.push("/shop");
     },
-    async download_report() {
-      try {
-        const response = await fetch("/api/manager/prepare_report", {
-          headers: { Authorization: `Bearer ${getToken()}` },
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error || `Report download failed (HTTP ${response.status})`);
-        }
-        const url = window.URL.createObjectURL(await response.blob());
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", "order_report.csv");
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        window.URL.revokeObjectURL(url);
-      } catch (error) {
-        console.error("Error downloading order report:", error);
-        alert(error.message);
-      }
+    download_report() {
+      return downloadReport();
     },
   },
 };
