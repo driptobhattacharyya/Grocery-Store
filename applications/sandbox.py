@@ -301,6 +301,9 @@ def open_connection(app):
         conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
     except sqlite3.OperationalError:
         raise SandboxExpired() from None
+    # Per-connection (not stored in the file): a write that would grow the database past
+    # this raises "database or disk is full", which the API reports as 507 sandbox_full.
+    conn.execute(f"PRAGMA max_page_count = {int(app.config.get('SANDBOX_MAX_PAGES', 2000))}")
     return conn
 
 

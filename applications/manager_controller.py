@@ -16,8 +16,8 @@ from applications.cart_functions import product_exists
 from applications.categories_functions import get_category_id_by_name
 from applications.database import get_db
 from applications.http_errors import (
-    BadRequest, Forbidden, NotFound, api_errors, iso_date, json_body, number, only_ok,
-    positive_int, require_str,
+    MAX_CATEGORY, MAX_EMAIL, MAX_PRODUCT_NAME, MAX_UNIT, BadRequest, Forbidden, NotFound, api_errors,
+    iso_date, json_body, number, only_ok, positive_int, require_password, require_str,
 )
 from applications.login_manager import manager_login, normalize_email
 from applications.manager_functions import (
@@ -47,9 +47,9 @@ def _required_id(data, field):
 
 def _product_fields(data):
     """Validate the body shared by add_product and edit_product."""
-    product_name = require_str(data, 'product_name', "Product name")
-    category_name = require_str(data, 'category', "Category")
-    unit = require_str(data, 'unit', "Unit")
+    product_name = require_str(data, 'product_name', "Product name", MAX_PRODUCT_NAME)
+    category_name = require_str(data, 'category', "Category", MAX_CATEGORY)
+    unit = require_str(data, 'unit', "Unit", MAX_UNIT)
     for field, label in (('quantity', "Quantity"), ('price', "Price"),
                          ('manufacture_date', "Manufacture date"), ('expiry_date', "Expiry date")):
         if data.get(field) in (None, ""):
@@ -71,10 +71,8 @@ def _product_fields(data):
 @api_errors
 def manager_login_route():  # admin login
     data = json_body()
-    email = normalize_email(require_str(data, 'email', "Username"))
-    password = data.get('password')
-    if not isinstance(password, str) or not password:
-        raise BadRequest("Password is required")
+    email = normalize_email(require_str(data, 'email', "Username", MAX_EMAIL))
+    password = require_password(data)
     manager_login(email, password)
     access_token = create_access_token(identity=email, additional_claims=token_claims("admin"))
     return jsonify({'access_token': access_token})
@@ -146,7 +144,7 @@ def remove_category():
 @api_errors
 def add_category():
     _require_admin()
-    category_name = require_str(json_body(), 'category_name', "Category name")
+    category_name = require_str(json_body(), 'category_name', "Category name", MAX_CATEGORY)
     add_category_to_db(category_name)
     cache.clear()
     return jsonify({"success": "Category added successfully"}), 201

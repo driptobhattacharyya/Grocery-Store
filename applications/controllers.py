@@ -14,8 +14,8 @@ from applications.cart_functions import (
 )
 from applications.categories_functions import category_exists, get_10_products, get_categories, get_products_by_category
 from applications.http_errors import (
-    BadRequest, NotFound, api_errors, json_body, number, only_ok, optional_date,
-    positive_int, require_str,
+    MAX_ADDRESS, MAX_EMAIL, MAX_NAME, BadRequest, NotFound, api_errors, check_length, json_body, number,
+    only_ok, optional_date, positive_int, require_password, require_str,
 )
 from applications.jobs_routes import enqueue_order_confirmation
 from applications.login_manager import (
@@ -148,10 +148,8 @@ def user_dashboard():
 @api_errors
 def login_route():
     data = json_body()
-    email = normalize_email(require_str(data, 'email', "Email"))
-    password = data.get('password')
-    if not isinstance(password, str) or not password:
-        raise BadRequest("Password is required")
+    email = normalize_email(require_str(data, 'email', "Email", MAX_EMAIL))
+    password = require_password(data)
     login(email, password)
     user = fetch_user_info(email)
     is_manager = manager_check(email)
@@ -170,8 +168,8 @@ def login_route():
 @api_errors
 def signup_route():
     data = json_body()
-    name = require_str(data, 'name', "Name")
-    email = normalize_email(require_str(data, 'email', "Email"))
+    name = require_str(data, 'name', "Name", MAX_NAME)
+    email = normalize_email(require_str(data, 'email', "Email", MAX_EMAIL))
     password = data.get('password')
     phone_number = data.get('phoneNo')
     address = data.get('address') or ""
@@ -179,10 +177,10 @@ def signup_route():
         raise BadRequest("Valid email required")
     if not validate_phone_number(phone_number):
         raise BadRequest("Valid phone number required")
-    if not isinstance(password, str) or not password:
-        raise BadRequest("Password is required")
+    password = require_password(data)
     if not isinstance(address, str):
         raise BadRequest("Address must be text")
+    check_length(address.strip(), MAX_ADDRESS, "Address")
     register_user(email, password, name, phone_number.strip(), address.strip())
     return jsonify({"message": "Success"}), 201
 

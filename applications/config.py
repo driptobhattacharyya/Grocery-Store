@@ -61,6 +61,9 @@ class Config:
     TEMPLATE_DB_PATH = _env("TEMPLATE_DB_PATH", os.path.join(SANDBOX_DIR, "template.db"))
     SANDBOX_TTL_MINUTES = float(_env("SANDBOX_TTL_MINUTES", "60"))
     SANDBOX_MAX = _env_int("SANDBOX_MAX", 200)
+    # Size cap of one sandbox database, in pages (4 KB each: 2000 = 8 MB). A write past it
+    # fails with 507 {"code": "sandbox_full"}.
+    SANDBOX_MAX_PAGES = _env_int("SANDBOX_MAX_PAGES", 2000)
     # Password of the admin account inside every sandbox. Deliberately public:
     # the UI shows it. Unrelated to the operator's ADMIN_PASSWORD.
     DEMO_ADMIN_PASSWORD = _env("DEMO_ADMIN_PASSWORD", "admin1234")
@@ -86,6 +89,9 @@ class Config:
     AUTH_RATE_LIMIT = _env("AUTH_RATE_LIMIT", "10 per minute; 100 per hour")
     RATELIMIT_STORAGE_URI = _env("RATELIMIT_STORAGE_URI") or REDIS_URL or "memory://"
     RATELIMIT_HEADERS_ENABLED = True
+    # Applied per client to every mutating request (POST/PUT/DELETE/PATCH), on top of the
+    # stricter per-route limits below. GET/HEAD/OPTIONS are not counted.
+    RATELIMIT_DEFAULT = _env("RATELIMIT_DEFAULT", "300 per minute")
 
     # Number of reverse proxies in front of the app whose X-Forwarded-* headers
     # are trusted (Render has one). Use 0 when the app is exposed directly,

@@ -1,5 +1,6 @@
 import logging
 import os
+import sqlite3
 import sys
 
 from flask import Flask, abort, g, jsonify, request, send_from_directory
@@ -14,6 +15,7 @@ from applications.caching import cache
 from applications.config import Config, validate_config
 from applications import sandbox
 from applications.database import close_db, get_db, init_db
+from applications.http_errors import SandboxFull, is_sqlite_full
 from applications.sandbox import SandboxExpired
 from applications.workers import celery_init_app
 
@@ -69,7 +71,8 @@ app.teardown_appcontext(close_db)
 # swallow_errors: if the shared store (Redis) blips, requests go through
 # unlimited instead of failing with a 500 on every rate-limited endpoint.
 limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"],
-                  swallow_errors=True)
+                  swallow_errors=True, default_limits=[app.config["RATELIMIT_DEFAULT"]],
+                  default_limits_exempt_when=lambda: request.method in ("GET", "HEAD", "OPTIONS"))
 
 if app.config["DEMO_MODE"]:
     sandbox.init_sandboxes(app, passive=app.config["PROCESS_ROLE"] == "worker")  # template DB + sandbox registry; no single shared DB
@@ -217,6 +220,13 @@ def _http_error(exc):
     response.data = jsonify({"error": message}).get_data()
     response.content_type = "application/json"
     return response
+
+
+@app.errorhandler(sqlite3.OperationalError)
+def _sqlite_error(exc):
+    if is_sqlite_full(exc):  # a write outside @api_errors (e.g. a before_request hook)
+        return jsonify({"error": SandboxFull().message, "code": SandboxFull.code}), SandboxFull.status
+    return _unhandled_error(exc)
 
 
 @app.errorhandler(SandboxExpired)

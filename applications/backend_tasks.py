@@ -13,12 +13,14 @@ would mail whatever addresses visitors typed in at sign-up.
 """
 import datetime
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from celery import shared_task
 
 from applications.database import get_db
 from applications.email_templates import render
+from applications.http_errors import is_sqlite_full
 from applications.mail_service import PREVIEW, EmailDisabled, MailError, send_email
 from applications.sandbox import SandboxExpired, bind_sandbox
 
@@ -125,7 +127,8 @@ def execute_job(sandbox_id, job_id, kind, account=None, order_id=None):
     except Exception:
         log.exception("Job %s crashed", job_id)
         try:
-            _set_status(job_id, "failed", "Unexpected error while sending")
+            _set_status(job_id, "failed", "This demo sandbox is full. Reset the demo to start fresh."
+                        if is_sqlite_full(sys.exc_info()[1]) else "Unexpected error while sending")
         except Exception:
             log.exception("Could not mark job %s as failed", job_id)
         return "failed"

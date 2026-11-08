@@ -3,6 +3,7 @@ small request-validation helpers shared by the API controllers.
 
 Every error response has the shape ``{"error": "<message>"}``.
 """
+import sqlite3
 from datetime import date
 from functools import wraps
 from numbers import Number
@@ -42,6 +43,20 @@ class Conflict(ApiError):
     status = 409
 
 
+class SandboxFull(ApiError):
+    """The sandbox database reached its size cap (SQLITE_FULL)."""
+
+    status = 507
+    code = "sandbox_full"
+
+    def __init__(self):
+        super().__init__("This demo sandbox is full. Reset the demo to start fresh.")
+
+
+def is_sqlite_full(exc):
+    return isinstance(exc, sqlite3.OperationalError) and "database or disk is full" in str(exc).lower()
+
+
 def error_response(message, status, code=None):
     body = {"error": message}
     if code:
@@ -61,6 +76,11 @@ def api_errors(view):
         except HTTPException:
             # e.g. 413 from reading an oversized body: app.py renders it as JSON
             raise
+        except sqlite3.OperationalError as e:
+            if is_sqlite_full(e):
+                return error_response(SandboxFull().message, SandboxFull.status, SandboxFull.code)
+            current_app.logger.exception("Unhandled error in %s %s", request.method, request.path)
+            return error_response("Something went wrong. Please try again later.", 500)
         except Exception:
             current_app.logger.exception("Unhandled error in %s %s", request.method, request.path)
             return error_response("Something went wrong. Please try again later.", 500)
@@ -86,11 +106,38 @@ def json_body():
     return data
 
 
-def require_str(data, field, label=None):
+# Longest accepted visitor-written text, by field (the sandbox is small and the text is
+# shown in tables, the DB drawer and the SQL console).
+MAX_PRODUCT_NAME = 60
+MAX_UNIT = 20
+MAX_CATEGORY = 40
+MAX_NAME = 60
+MAX_ADDRESS = 200
+MAX_EMAIL = 254
+MAX_PASSWORD = 128
+
+
+def check_length(value, max_len, label):
+    if len(value) > max_len:
+        raise BadRequest(f"{label} is too long (at most {max_len} characters)")
+    return value
+
+
+def require_str(data, field, label=None, max_len=None):
     value = data.get(field)
     if not isinstance(value, str) or not value.strip():
         raise BadRequest(f"{label or field} is required")
-    return value.strip()
+    value = value.strip()
+    if max_len is not None:
+        check_length(value, max_len, label or field)
+    return value
+
+
+def require_password(data, field="password", label="Password"):
+    value = data.get(field)
+    if not isinstance(value, str) or not value:
+        raise BadRequest(f"{label} is required")
+    return check_length(value, MAX_PASSWORD, label)
 
 
 def positive_int(value, label, allow_zero=False):
