@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from celery import shared_task
 
 from applications.database import get_db
-from applications.email_templates import render
+from applications.email_templates import render, safe_account, safe_product_name, safe_unit
 from applications.http_errors import is_sqlite_full
 from applications.mail_service import PREVIEW, EmailDisabled, MailError, send_email
 from applications.sandbox import SandboxExpired, bind_sandbox
@@ -46,7 +46,7 @@ def _order_confirmation(order_id):
         """SELECT oi.product_name, oi.quantity, COALESCE(p.price, 0)
            FROM order_items oi LEFT JOIN products p ON p.name = oi.product_name
            WHERE oi.orderID = ? ORDER BY oi.order_itemID""", (order_id,)).fetchall()
-    items = [{"name": n, "quantity": q, "line_total": (q or 0) * price} for n, q, price in rows]
+    items = [{"name": safe_product_name(n), "quantity": q, "line_total": (q or 0) * price} for n, q, price in rows]
     return render("order_confirmation", order_id=order_id, items=items, total=float(order[0] or 0))
 
 
@@ -58,14 +58,15 @@ def _monthly_report(account):
         "SELECT orderID, order_date, total_price FROM orders WHERE email = ? AND order_date >= ? "
         "ORDER BY orderID DESC LIMIT 25", (account, since)).fetchall()
     orders = [{"id": i, "date": d, "total": float(t or 0)} for i, d, t in rows]
-    return render("monthly_report", account=account, orders=orders, total=sum(o["total"] for o in orders))
+    return render("monthly_report", account=safe_account(account), orders=orders, total=sum(o["total"] for o in orders))
 
 
 def _daily_reminder():
     rows = get_db().execute(
-        """SELECT p.name, p.price, p.unit FROM products p JOIN inventory i ON i.productID = p.productID
+        """SELECT p.productID, p.name, p.price, p.unit FROM products p JOIN inventory i ON i.productID = p.productID
            WHERE i.quantity > 0 ORDER BY p.productID LIMIT 5""").fetchall()
-    return render("daily_reminder", products=[{"name": n, "price": float(p), "unit": u} for n, p, u in rows])
+    return render("daily_reminder", products=[
+        {"name": safe_product_name(n, pid), "price": float(p), "unit": safe_unit(u, pid)} for pid, n, p, u in rows])
 
 
 def build_message(kind, account=None, order_id=None):

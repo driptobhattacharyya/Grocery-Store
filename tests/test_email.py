@@ -291,15 +291,15 @@ def test_bad_token_on_job_request_is_401(client, set_email):
     assert _post_job(client, headers=bearer("garbage")).status_code == 401
 
 
-def test_product_names_are_escaped_in_the_outbox(client, set_email, execute):
+def test_edited_product_names_never_reach_the_outbox(client, set_email, execute):
     execute("UPDATE products SET name = ? WHERE productID = 1", '<script>alert("x")</script>')
     set_email()
     _post_job(client, "daily_reminder")
     html = client.get("/api/demo/outbox").get_json()["messages"][0]["html"]
-    assert "<script>" not in html and "&lt;script&gt;" in html
+    assert "<script>" not in html and "alert" not in html and "a product you added" in html
 
 
-def test_order_confirmation_has_footer_and_escaped_items(client, set_email, execute, shopper_token):
+def test_order_confirmation_has_footer_and_hides_edited_items(client, set_email, execute, shopper_token):
     execute("UPDATE products SET name = ? WHERE productID = ?", "<b>Apple</b>", APPLE)
     set_email()
     client.post("/api/add_to_cart", json={"product_id": APPLE, "quantity": 1}, headers=bearer(shopper_token))
@@ -307,7 +307,7 @@ def test_order_confirmation_has_footer_and_escaped_items(client, set_email, exec
     message = client.get("/api/demo/outbox").get_json()["messages"][0]
     html = message["html"]
     assert f"#{order['order_id']}" in message["subject"] and f"#{order['order_id']}" in html
-    assert "&lt;b&gt;Apple&lt;/b&gt;" in html and "<b>Apple</b>" not in html
+    assert "Apple</b>" not in html and "a product you added" in html
     assert "180.00 INR" in html
     assert "grocery-store.driptobhattacharyya.com" in html and "No mailing list." in html
 

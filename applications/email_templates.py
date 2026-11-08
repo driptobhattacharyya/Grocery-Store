@@ -1,9 +1,47 @@
-"""Fixed HTML e-mail templates. Everything dynamic goes through Jinja2 autoescaping
-and nothing is visitor-typed free text: product names come from the sandbox (and are
-escaped), the rest is numbers, dates and ids."""
+"""Fixed HTML e-mail templates, sent from a real domain to real inboxes.
+
+Nothing a visitor can type may appear in a message (a sandbox is editable, so a visitor
+could otherwise get "URGENT: verify your account at ..." delivered from our domain).
+Product names and units are rendered only if they equal the seeded catalog value (see
+``safe_product_name``); account names only if they are a seeded demo account. Everything
+else is numbers, dates and ids. Jinja2 autoescaping stays on as a second layer.
+"""
 from jinja2 import Environment
 
+from applications.database import DEMO_CATALOG, DEMO_MANAGER, DEMO_USER
+
 _env = Environment(autoescape=True)
+
+NEUTRAL_PRODUCT = "a product you added"
+NEUTRAL_UNIT = "unit"
+NEUTRAL_ACCOUNT = "your demo account"
+
+# Seeded product ids are 1..N in catalog order (see database._seed).
+_SEEDED = {}
+for _category, _products in DEMO_CATALOG:
+    for _name, _price, _unit, _shelf, _stock in _products:
+        _SEEDED[len(_SEEDED) + 1] = (_name, _unit)
+SEEDED_NAMES = frozenset(name for name, _ in _SEEDED.values())
+SEEDED_UNITS = frozenset(unit for _, unit in _SEEDED.values())
+SEEDED_ACCOUNTS = frozenset({DEMO_USER[0], DEMO_MANAGER[0], "admin"})
+
+
+def safe_product_name(name, product_id=None):
+    """``name`` if it is exactly the seeded name (of product ``product_id`` when known,
+    else of any seeded product); otherwise a neutral text."""
+    if product_id is not None:
+        return name if _SEEDED.get(product_id, (None,))[0] == name else NEUTRAL_PRODUCT
+    return name if name in SEEDED_NAMES else NEUTRAL_PRODUCT
+
+
+def safe_unit(unit, product_id=None):
+    if product_id is not None:
+        return unit if _SEEDED.get(product_id, (None, None))[1] == unit else NEUTRAL_UNIT
+    return unit if unit in SEEDED_UNITS else NEUTRAL_UNIT
+
+
+def safe_account(account):
+    return account if account in SEEDED_ACCOUNTS else NEUTRAL_ACCOUNT
 
 SITE = "grocery-store.driptobhattacharyya.com"
 FOOTER = (
