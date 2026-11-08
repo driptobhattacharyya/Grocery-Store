@@ -12,7 +12,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from applications.caching import cache
 from applications.config import Config, validate_config
+from applications import sandbox
 from applications.database import close_db, get_db, init_db
+from applications.sandbox import SandboxExpired
 from applications.workers import celery_init_app
 
 
@@ -49,14 +51,32 @@ if app.config["TRUSTED_PROXY_COUNT"] > 0:
 jwt = JWTManager(app)
 cache.init_app(app)
 if app.config["CORS_ORIGINS"]:
-    CORS(app, origins=app.config["CORS_ORIGINS"])
+    # The browser must be able to send the JWT and the sandbox id, and read
+    # the CSV filename. flask-cors also decorates error responses (401, 410,
+    # 429, 500), which the SPA needs to be able to read.
+    CORS(
+        app,
+        origins=app.config["CORS_ORIGINS"],
+        allow_headers=["Authorization", "Content-Type", "X-Sandbox-Id"],
+        expose_headers=["Content-Disposition"],
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        max_age=600,
+    )
 app.teardown_appcontext(close_db)
 
 # In-memory storage is per process, which is consistent because gunicorn runs
 # a single worker (see gunicorn.conf.py); with REDIS_URL it is shared.
 limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"])
 
-init_db(app)
+if app.config["DEMO_MODE"]:
+    sandbox.init_sandboxes(app)  # template DB + sandbox registry; no single shared DB
+else:
+    init_db(app)
+
+
+@app.before_request
+def _bind_sandbox():
+    sandbox.resolve_request_sandbox(app)
 
 
 # --- JWT errors: always JSON 401 ------------------------------------------------
@@ -76,23 +96,33 @@ def _missing_token(reason):
 
 
 # Tokens outlive the database on an ephemeral disk (redeploy, restart, idle
-# spin-down) because the signing key persists. Each token carries the id of
-# the database it was issued against ("dbid"); reject it when that database is
-# gone or its account no longer exists (e.g. a deleted user whose e-mail was
-# re-registered by someone else).
+# spin-down) because the signing key persists.
+#  - Demo mode: a token carries the id of the sandbox it was issued in ("sbx")
+#    and is only valid with that same X-Sandbox-Id (already validated and bound
+#    to `g` by the before_request hook); so a token from an expired or other
+#    sandbox fails.
+#  - Single-DB mode: it carries the id of the database ("dbid").
+# Either way the account must still exist in the database being used (e.g. a
+# deleted user whose e-mail was re-registered by someone else).
 @jwt.token_verification_loader
 def _token_matches_database(jwt_header, jwt_payload):
-    cache_key = (jwt_payload.get("jti"), jwt_payload.get("dbid"))
+    demo = app.config["DEMO_MODE"]
+    scope = jwt_payload.get("sbx") if demo else jwt_payload.get("dbid")
+    cache_key = (jwt_payload.get("jti"), scope, g.get("sandbox_id"))
     checked = g.get("_token_checked")
     if checked is not None and checked[0] == cache_key:
         return checked[1]  # per_user_cache_key verifies the same token again
+    if demo:
+        if not scope or scope != g.get("sandbox_id"):
+            g._token_checked = (cache_key, False)
+            return False
     table = "managers" if jwt_payload.get("role") == "admin" else "users"
     row = get_db().execute(
         f"SELECT (SELECT value FROM meta WHERE key = 'db_instance_id'), "
         f"EXISTS (SELECT 1 FROM {table} WHERE email = ?)",
         (jwt_payload.get("sub"),),
     ).fetchone()
-    ok = bool(jwt_payload.get("dbid")) and row[0] == jwt_payload.get("dbid") and bool(row[1])
+    ok = bool(row[1]) if demo else (bool(scope) and row[0] == scope and bool(row[1]))
     g._token_checked = (cache_key, ok)
     return ok
 
@@ -122,20 +152,35 @@ def setup_periodic_tasks(sender, **kwargs):
 with app.app_context():
     import applications.controllers  # noqa: E402,F401
     import applications.manager_controller  # noqa: E402,F401
+    import applications.demo_routes  # noqa: E402,F401
 
 
 # --- Rate limiting of credential endpoints ---------------------------------------
 # Applied here (rather than as decorators in the route modules) by wrapping the
 # already-registered view functions.
-for _endpoint in ("login_route", "manager_login_route", "signup_route"):
-    app.view_functions[_endpoint] = limiter.limit(app.config["AUTH_RATE_LIMIT"])(app.view_functions[_endpoint])
+for _endpoint, _limit in (
+    ("login_route", app.config["AUTH_RATE_LIMIT"]),
+    ("manager_login_route", app.config["AUTH_RATE_LIMIT"]),
+    ("signup_route", app.config["AUTH_RATE_LIMIT"]),
+    ("demo_session", app.config["DEMO_SESSION_RATE_LIMIT"]),
+    ("demo_sql", app.config["DEMO_SQL_RATE_LIMIT"]),
+):
+    app.view_functions[_endpoint] = limiter.limit(_limit)(app.view_functions[_endpoint])
 
 
 @app.get("/api/ready")
 def ready():
-    """Readiness probe: like /api/health, but also checks the database."""
+    """Readiness probe: like /api/health, but also checks the database (the
+    template DB in demo mode, since the probe has no sandbox)."""
     try:
-        get_db().execute("SELECT 1").fetchone()
+        if app.config["DEMO_MODE"]:
+            conn = sandbox.open_template(app)
+            try:
+                conn.execute("SELECT 1 FROM users LIMIT 1").fetchall()
+            finally:
+                conn.close()
+        else:
+            get_db().execute("SELECT 1").fetchone()
     except Exception:
         log.exception("Readiness check failed")
         return jsonify({"status": "unavailable"}), 503
@@ -174,6 +219,11 @@ def _http_error(exc):
     response.data = jsonify({"error": message}).get_data()
     response.content_type = "application/json"
     return response
+
+
+@app.errorhandler(SandboxExpired)
+def _sandbox_expired(exc):
+    return jsonify({"error": exc.message, "code": exc.code}), exc.status
 
 
 @app.errorhandler(Exception)

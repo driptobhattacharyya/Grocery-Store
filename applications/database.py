@@ -74,6 +74,23 @@ CREATE TABLE IF NOT EXISTS order_items (
     product_name TEXT NOT NULL,
     quantity     INTEGER
 );
+CREATE TABLE IF NOT EXISTS jobs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    to_email   TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    detail     TEXT
+);
+CREATE TABLE IF NOT EXISTS outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     INTEGER,
+    to_email   TEXT NOT NULL,
+    subject    TEXT NOT NULL,
+    html       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT NOT NULL PRIMARY KEY,
     value TEXT NOT NULL
@@ -128,10 +145,6 @@ log = logging.getLogger(__name__)
 # "FOREIGN KEY constraint failed". The REFERENCES clauses document intent only.
 
 
-def _database_path():
-    return current_app.config["DATABASE_PATH"]
-
-
 def _connect(path, config, **kwargs):
     # `timeout` sets SQLite's busy timeout: wait for locks instead of failing
     # immediately with "database is locked".
@@ -141,12 +154,18 @@ def _connect(path, config, **kwargs):
 def get_db():
     """One connection per request/app context, closed by ``close_db``.
 
+    In demo mode the database is the sandbox bound to this request/app context
+    (``g.sandbox_id``, set from the ``X-Sandbox-Id`` header or by
+    ``sandbox.bind_sandbox``); otherwise it is the single DATABASE_PATH file.
+
     Connections are never shared between threads: each gunicorn thread handles
     a request in its own app context, so sqlite3's ``check_same_thread`` default
     is kept on as a safety net.
     """
     if "db" not in g:
-        g.db = _connect(_database_path(), current_app.config)
+        from applications import sandbox
+
+        g.db = sandbox.open_connection(current_app)
         # WAL is persisted in the file by init_db; NORMAL is safe with WAL
         # and avoids an fsync on every commit.
         g.db.execute("PRAGMA synchronous=NORMAL")
@@ -205,15 +224,19 @@ def _enable_wal(conn, timeout):
             time.sleep(0.05)
 
 
-def init_db(app):
+def init_db(app, path=None, admin_password=None):
     """Create the database (schema + demo data) if it doesn't exist yet.
+
+    ``path`` defaults to DATABASE_PATH and ``admin_password`` to ADMIN_PASSWORD;
+    demo mode builds its template database with DEMO_ADMIN_PASSWORD instead.
 
     Safe to run from several processes at once (web server, Celery worker and
     beat all import the app): the whole check-create-seed sequence runs in one
     ``BEGIN IMMEDIATE`` transaction, so the second process waits for the
     first and then sees the tables already exist instead of seeding twice.
     """
-    path = app.config["DATABASE_PATH"]
+    path = path or app.config["DATABASE_PATH"]
+    admin_password = admin_password or app.config["ADMIN_PASSWORD"]
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     conn = _connect(path, app.config, isolation_level=None)  # manual transaction control
@@ -243,7 +266,7 @@ def init_db(app):
             cur.execute("DELETE FROM managers WHERE email <> ?", (admin,))
             cur.execute(
                 "INSERT OR REPLACE INTO managers (email, password) VALUES (?, ?)",
-                (admin, generate_password_hash(app.config["ADMIN_PASSWORD"])),
+                (admin, generate_password_hash(admin_password)),
             )
             if fresh:
                 _seed(cur)

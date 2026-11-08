@@ -7,7 +7,7 @@ Errors are returned as ``{"error": "<message>"}`` with a matching HTTP status
 from flask import current_app as app, jsonify, request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 
-from applications.auth import per_user_cache_key
+from applications.auth import per_user_cache_key, public_cache_key, token_claims
 from applications.caching import cache
 from applications.cart_functions import (
     checkout_cart, delete_cart_item, fetch_cart_items_by_email, insert_cart_item, update_cart_item,
@@ -17,7 +17,6 @@ from applications.http_errors import (
     BadRequest, NotFound, api_errors, json_body, number, only_ok, optional_date,
     positive_int, require_str,
 )
-from applications.database import get_db_instance_id
 from applications.login_manager import (
     login, normalize_email, register_user, validate_email, validate_phone_number,
 )
@@ -34,14 +33,14 @@ def health():
 
 
 @app.route('/api/user_dashboard', methods=["GET"])
-@cache.cached(timeout=30, response_filter=only_ok)
+@cache.cached(timeout=30, key_prefix=public_cache_key, response_filter=only_ok)
 @api_errors
 def index():
     return jsonify({"products": get_10_products()})
 
 
 @app.route("/api/getCategories", methods=['GET'])
-@cache.cached(timeout=50, response_filter=only_ok)
+@cache.cached(timeout=50, key_prefix=public_cache_key, response_filter=only_ok)
 @api_errors
 def getCategories():
     return jsonify(get_categories())
@@ -156,7 +155,7 @@ def login_route():
     is_manager = manager_check(email)
     access_token = create_access_token(
         identity=email,
-        additional_claims={"role": "manager" if is_manager else "user", "dbid": get_db_instance_id()},
+        additional_claims=token_claims("manager" if is_manager else "user"),
     )
     return jsonify({
         'access_token': access_token,

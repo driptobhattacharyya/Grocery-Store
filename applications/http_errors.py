@@ -13,6 +13,7 @@ from werkzeug.exceptions import HTTPException
 
 class ApiError(Exception):
     status = 400
+    code = None  # optional machine-readable code, returned as {"code": ...}
 
     def __init__(self, message, status=None):
         super().__init__(message)
@@ -41,8 +42,11 @@ class Conflict(ApiError):
     status = 409
 
 
-def error_response(message, status):
-    return jsonify({"error": message}), status
+def error_response(message, status, code=None):
+    body = {"error": message}
+    if code:
+        body["code"] = code
+    return jsonify(body), status
 
 
 def api_errors(view):
@@ -53,7 +57,7 @@ def api_errors(view):
         try:
             return view(*args, **kwargs)
         except ApiError as e:
-            return error_response(e.message, e.status)
+            return error_response(e.message, e.status, e.code)
         except HTTPException:
             # e.g. 413 from reading an oversized body: app.py renders it as JSON
             raise
