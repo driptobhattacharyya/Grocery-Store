@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-COPY app.py celeryconfig.py gunicorn.conf.py ./
+COPY app.py celeryconfig.py gunicorn.conf.py supervisor.py ./
 COPY applications/ ./applications/
 COPY --from=frontend /frontend/dist ./frontend/dist
 
@@ -33,5 +33,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/health' % os.environ.get('PORT', '8000'), timeout=4)" || exit 1
 
-# Settings (bind to $PORT, 1 worker x 4 threads, logging) are in gunicorn.conf.py.
-CMD ["gunicorn", "--config", "gunicorn.conf.py", "app:app"]
+# supervisor.py runs gunicorn (settings in gunicorn.conf.py: $PORT, 1 worker x 4 threads) and,
+# only when REDIS_URL is set, one Celery worker; if either dies the container exits.
+CMD ["python", "supervisor.py"]
