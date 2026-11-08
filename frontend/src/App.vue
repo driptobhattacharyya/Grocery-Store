@@ -1,6 +1,29 @@
 <template>
-  <router-view />
+  <DemoToolbar v-if="showToolbar" />
+  <router-view :key="viewKey" />
+  <ServerStatus />
 </template>
+
+<script>
+import DemoToolbar from "@/components/demo/DemoToolbar.vue";
+import ServerStatus from "@/components/demo/ServerStatus.vue";
+import { demo, hasSandbox } from "@/demo";
+
+export default {
+  components: { DemoToolbar, ServerStatus },
+  computed: {
+    // A new sandbox starts from clean page state (even on the same route).
+    viewKey() {
+      return demo.viewKey;
+    },
+    // On every page except the landing page, once a sandbox exists.
+    showToolbar() {
+      void demo.version;
+      return this.$route.name !== "landing" && hasSandbox();
+    },
+  },
+};
+</script>
 
 <style>
 #app {

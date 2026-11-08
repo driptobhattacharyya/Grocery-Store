@@ -42,7 +42,7 @@
     <div v-if="cartItems.length === 0">
       <div class="card-body text-center">
         <h4>Your cart is empty.</h4>
-        <router-link to="/" class="btn btn-primary">Continue Shopping</router-link>
+        <router-link to="/shop" class="btn btn-primary">Continue Shopping</router-link>
       </div>
     </div>
   </div>

@@ -6,7 +6,7 @@
       We couldn't find <code>{{ $route.fullPath }}</code>. It may have moved or
       never existed.
     </p>
-    <router-link to="/" class="btn btn-success">Back to the store</router-link>
+    <router-link to="/shop" class="btn btn-success">Back to the store</router-link>
   </main>
 </template>
 

@@ -81,6 +81,7 @@
 <script>
 import axios from "axios";
 import "@/assets/style.css";
+import { rememberEmail } from "@/demo";
 
 export default {
   data() {
@@ -107,6 +108,7 @@ export default {
           email: this.email,
           password: this.password,
         });
+        rememberEmail(this.email);
         alert("Welcome aboard! Now you have to login.");
         this.$router.push("/login");
       } catch (error) {

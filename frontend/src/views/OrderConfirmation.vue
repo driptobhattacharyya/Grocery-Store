@@ -11,7 +11,7 @@
         </ul>
         <p v-if="orderId" class="order-id">Order #{{ orderId }}</p>
         <p class="total-price">Total Price: ₹{{ totalAmount.toFixed(2) }}</p>
-        <router-link to="/" class="btn btn-primary back-btn">Back to Home</router-link>
+        <router-link to="/shop" class="btn btn-primary back-btn">Back to Home</router-link>
       </div>
     </div>
   </div>
