@@ -9,9 +9,11 @@ from flask_jwt_extended.exceptions import JWTExtendedException
 from jwt.exceptions import PyJWTError
 
 from applications import backend_tasks
+from applications.client_key import client_key
 from applications.database import get_db
 from applications.demo_routes import OUTBOX_HTML_MAX, OUTBOX_RESPONSE_BUDGET, TRUNCATED_MARK, _display_cell
-from applications.email_limits import EmailLimitReached, release, reserve
+from applications.email_domain import domain_receives_mail
+from applications.email_limits import EmailLimitReached, canonical_recipient, release, reserve
 from applications.http_errors import ApiError, BadRequest, Unauthorized, api_errors, json_body
 from applications.mail_service import delivery_configured, email_enabled_for_ui, http_post_json
 
@@ -19,9 +21,11 @@ log = logging.getLogger(__name__)
 
 TURNSTILE_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 MAX_EMAIL_LENGTH = 254
+# The local part is deliberately tighter than RFC 5322: only [a-z0-9._+-], no leading/trailing
+# dot, no "..". Exotic quoted/symbol addresses are not worth the bounce and canonicalisation risk.
 _EMAIL_RE = re.compile(
-    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}"
+    r"(?![.])(?!.*\.\.)(?!.*\.@)[a-z0-9._+-]{1,64}@"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}"
 )
 
 
@@ -43,7 +47,16 @@ def clean_email(value):
     if (len(email) > MAX_EMAIL_LENGTH or ".." in email or not _EMAIL_RE.fullmatch(email)
             or email.startswith(".") or "@." in email or email.split("@")[0].endswith(".")):
         raise BadRequest("Enter a valid e-mail address")
+    if not canonical_recipient(email).split("@")[0]:  # e.g. "+tag@example.com"
+        raise BadRequest("Enter a valid e-mail address")
     return email
+
+
+def check_domain(email):
+    """Refuse addresses whose domain cannot receive mail (bounces hurt our sender reputation).
+    Unknown (DNS timeout) is accepted."""
+    if app.config["EMAIL_DOMAIN_CHECK"] and not domain_receives_mail(email.rpartition("@")[2]):
+        raise BadRequest("That e-mail domain doesn't seem to receive mail.")
 
 
 def check_turnstile(token):
@@ -60,6 +73,11 @@ def check_turnstile(token):
     except (OSError, ValueError):
         raise QueueUnavailable("Could not verify the human check. Please try again.") from None
     if status != 200 or body.get("success") is not True:
+        raise BadRequest("The human check failed. Please try again.")
+    expected = app.config["TURNSTILE_EXPECTED_HOSTNAME"]
+    if expected and str(body.get("hostname", "")).lower() != expected.lower():
+        # A token solved on another site's widget (or replayed from elsewhere).
+        log.warning("Turnstile hostname mismatch: got %r, expected %r", body.get("hostname"), expected)
         raise BadRequest("The human check failed. Please try again.")
 
 
@@ -84,7 +102,7 @@ def enqueue_job(kind, account=None, order_id=None):
     if not to_email:
         raise BadRequest("Enter your e-mail address first")
     try:
-        token = reserve(app, to_email, request.remote_addr, count_global=delivery_configured())
+        token = reserve(app, to_email, client_key(), count_global=delivery_configured())
     except EmailLimitReached:
         raise
     except Exception:  # the counter store (Redis) is down
@@ -130,6 +148,7 @@ def demo_email():
     data = json_body()
     email = clean_email(data.get("email"))
     check_turnstile(data.get("turnstile_token"))
+    check_domain(email)
     db = get_db()
     db.execute("INSERT INTO meta (key, value) VALUES ('visitor_email', ?) "
                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (email,))

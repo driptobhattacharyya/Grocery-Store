@@ -123,7 +123,19 @@ class Config:
     EMAIL_RECIPIENT_DAILY_LIMIT = _env_int("EMAIL_RECIPIENT_DAILY_LIMIT", 5)
     EMAIL_IP_DAILY_LIMIT = _env_int("EMAIL_IP_DAILY_LIMIT", 10)
     EMAIL_DAILY_CAP = _env_int("EMAIL_DAILY_CAP", 80)
+    # Cloudflare Turnstile (human check on POST /api/demo/email). The secret (here) and the
+    # site key (VITE_TURNSTILE_SITE_KEY, frontend build) are a PAIR: set both or neither.
     TURNSTILE_SECRET_KEY = _env("TURNSTILE_SECRET_KEY")
+    # The siteverify response must name this hostname. Set it to an empty value to skip the
+    # check (e.g. with Cloudflare's dummy test keys, which report "example.com").
+    TURNSTILE_EXPECTED_HOSTNAME = (os.environ["TURNSTILE_EXPECTED_HOSTNAME"].strip()
+                                   if "TURNSTILE_EXPECTED_HOSTNAME" in os.environ
+                                   else "grocery-store.driptobhattacharyya.com")
+    # In production, real sending (Resend) needs Turnstile; without it jobs stay in preview mode
+    # unless this is set to true (accepting that bots can make the demo e-mail strangers).
+    ALLOW_EMAIL_WITHOUT_TURNSTILE = _env_bool("ALLOW_EMAIL_WITHOUT_TURNSTILE", False)
+    # Reject addresses whose domain has no MX/A/AAAA record (DNS timeouts accept the address).
+    EMAIL_DOMAIN_CHECK = _env_bool("EMAIL_DOMAIN_CHECK", True)
     DEMO_EMAIL_RATE_LIMIT = _env("DEMO_EMAIL_RATE_LIMIT", "20 per hour")
     DEMO_JOBS_RATE_LIMIT = _env("DEMO_JOBS_RATE_LIMIT", "30 per hour")
     # How jobs run: "celery" (worker + REDIS_URL broker; the default with REDIS_URL),

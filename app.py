@@ -7,11 +7,11 @@ from flask import Flask, abort, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import HTTPException, InternalServerError, NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from applications.caching import cache
+from applications.client_key import client_key
 from applications.config import Config, validate_config
 from applications import sandbox
 from applications.database import close_db, get_db, init_db
@@ -42,6 +42,15 @@ except Exception as exc:
     log.critical("%s", exc)
     raise
 
+if app.config["IS_PRODUCTION"] and app.config["RESEND_API_KEY"] and not app.config["TURNSTILE_SECRET_KEY"]:
+    if app.config["ALLOW_EMAIL_WITHOUT_TURNSTILE"]:
+        log.warning("RESEND_API_KEY is set but TURNSTILE_SECRET_KEY is not: real e-mails are enabled WITHOUT a "
+                    "human check because ALLOW_EMAIL_WITHOUT_TURNSTILE=true. Bots can make the demo e-mail strangers.")
+    else:
+        log.warning("RESEND_API_KEY is set but TURNSTILE_SECRET_KEY is not: REAL E-MAIL SENDING IS DISABLED (jobs run "
+                    "in preview mode). Create a Turnstile widget and set TURNSTILE_SECRET_KEY (Render) plus "
+                    "VITE_TURNSTILE_SITE_KEY (frontend build), or set ALLOW_EMAIL_WITHOUT_TURNSTILE=true to send anyway.")
+
 # Behind a reverse proxy (Render), trust its X-Forwarded-For/-Proto headers so
 # request.remote_addr is the real client (used by the rate limiter) and
 # request.scheme is https. X-Forwarded-Host/-Port are not trusted: nothing
@@ -70,7 +79,7 @@ app.teardown_appcontext(close_db)
 # a single worker (see gunicorn.conf.py); with REDIS_URL it is shared.
 # swallow_errors: if the shared store (Redis) blips, requests go through
 # unlimited instead of failing with a 500 on every rate-limited endpoint.
-limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"],
+limiter = Limiter(client_key, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"],
                   swallow_errors=True, default_limits=[app.config["RATELIMIT_DEFAULT"]],
                   default_limits_exempt_when=lambda: request.method in ("GET", "HEAD", "OPTIONS"))
 

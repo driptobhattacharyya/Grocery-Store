@@ -42,9 +42,16 @@ def backend_name(config=None):
     config = config or current_app.config
     if config.get("EMAIL_BACKEND") == "smtp":
         return "smtp"
-    if config.get("RESEND_API_KEY"):
+    if config.get("RESEND_API_KEY") and real_sending_allowed(config):
         return "resend"
     return "preview"
+
+
+def real_sending_allowed(config):
+    """In production, e-mailing real inboxes needs the Turnstile human check (or an explicit
+    ALLOW_EMAIL_WITHOUT_TURNSTILE=true). Otherwise the jobs API stays in preview mode."""
+    return (not config.get("IS_PRODUCTION") or bool(config.get("TURNSTILE_SECRET_KEY"))
+            or bool(config.get("ALLOW_EMAIL_WITHOUT_TURNSTILE")))
 
 
 def delivery_configured(config=None):

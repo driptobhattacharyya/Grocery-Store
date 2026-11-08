@@ -36,7 +36,8 @@ for _key in ("REDIS_URL", "CORS_ORIGINS", "CONTENT_SECURITY_POLICY", "SECRET_KEY
              "DEMO_ADMIN_PASSWORD", "SANDBOX_TTL_MINUTES", "SANDBOX_MAX", "TEMPLATE_DB_PATH",
              "DEMO_SESSION_RATE_LIMIT", "DEMO_SQL_RATE_LIMIT", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_ENABLED",
              "EMAIL_BACKEND", "EMAIL_DAILY_CAP", "EMAIL_RECIPIENT_DAILY_LIMIT", "EMAIL_IP_DAILY_LIMIT",
-             "TURNSTILE_SECRET_KEY", "JOBS_EXECUTION", "PROCESS_ROLE", "CELERY_BROKER_URL"):
+             "TURNSTILE_SECRET_KEY", "TURNSTILE_EXPECTED_HOSTNAME", "ALLOW_EMAIL_WITHOUT_TURNSTILE",
+             "EMAIL_DOMAIN_CHECK", "RATELIMIT_DEFAULT", "SANDBOX_MAX_PAGES", "JOBS_EXECUTION", "PROCESS_ROLE", "CELERY_BROKER_URL"):
     os.environ.pop(_key, None)
 os.environ.update({
     "APP_ENV": "development",
@@ -48,6 +49,8 @@ os.environ.update({
     "RATELIMIT_STORAGE_URI": "memory://",
     "FRONTEND_DIST": os.path.join(_TMP, "no-frontend"),
     "LOG_LEVEL": "WARNING",
+    "EMAIL_DOMAIN_CHECK": "false",  # no DNS in tests; test_email_hardening turns it on with a mocked resolver
+    "TURNSTILE_EXPECTED_HOSTNAME": "",  # existing Turnstile tests don't return a hostname
     "JOBS_EXECUTION": "inline",  # e-mail jobs run synchronously and deterministically
 })
 

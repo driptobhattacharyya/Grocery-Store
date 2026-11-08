@@ -78,6 +78,20 @@ def get_counters(app):
     return counters
 
 
+_GMAIL_DOMAINS = ("gmail.com", "googlemail.com")
+
+
+def canonical_recipient(email):
+    """The mailbox an address really delivers to, for counting only (the e-mail is still sent
+    to the address as typed): lower-case, ``+tag`` removed from the local part, and for Gmail
+    dots removed and googlemail.com read as gmail.com."""
+    local, _, domain = email.strip().lower().rpartition("@")
+    local = local.split("+", 1)[0]
+    if domain in _GMAIL_DOMAINS:
+        local, domain = local.replace(".", ""), "gmail.com"
+    return f"{local}@{domain}"
+
+
 def _digest(value):
     return hashlib.sha256(value.encode()).hexdigest()[:24]  # keeps addresses/IPs out of Redis keys
 
@@ -85,10 +99,13 @@ def _digest(value):
 def reserve(app, recipient, ip, count_global):
     """Count one e-mail against every limit, or raise EmailLimitReached (counting nothing).
     Returns a token for ``release``."""
+    from applications.client_key import reduce_ip  # callers may pass a raw remote address
+
     counters = get_counters(app)
     day = _today()
+    ip = reduce_ip(ip)
     plan = [
-        (f"emaillimit:{day}:rcpt:{_digest(recipient)}", app.config["EMAIL_RECIPIENT_DAILY_LIMIT"],
+        (f"emaillimit:{day}:rcpt:{_digest(canonical_recipient(recipient))}", app.config["EMAIL_RECIPIENT_DAILY_LIMIT"],
          "This address has reached its limit of {n} demo e-mails per day."),
         (f"emaillimit:{day}:ip:{_digest(ip or '-')}", app.config["EMAIL_IP_DAILY_LIMIT"],
          "You have reached the limit of {n} demo e-mails per day. Try again tomorrow."),
