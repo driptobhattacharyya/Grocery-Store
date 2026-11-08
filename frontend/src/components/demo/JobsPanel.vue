@@ -9,19 +9,29 @@
           class="form-control form-control-sm flex-grow-1"
           placeholder="you@example.com"
           aria-label="Your e-mail address"
+          aria-describedby="email-error"
+          :aria-invalid="emailError ? 'true' : 'false'"
+          autocomplete="email"
+          maxlength="254"
           required
+          data-testid="email-input"
         />
-        <button type="submit" class="btn btn-primary btn-sm" :disabled="saving || (turnstileEnabled && !turnstileToken)">
+        <button
+          type="submit"
+          class="btn btn-primary btn-sm"
+          data-testid="email-save"
+          :disabled="saving || emailWait > 0 || (turnstileEnabled && !turnstileToken)"
+        >
           <span v-if="saving" class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
-          {{ jobs.email ? "Change" : "Save address" }}
+          {{ emailWait > 0 ? `Wait ${emailWait} s` : jobs.email ? "Change" : "Save address" }}
         </button>
       </form>
+      <div v-if="emailError" id="email-error" class="field-error mt-1" role="alert" data-testid="email-error">{{ emailError }}</div>
       <div v-if="turnstileEnabled" ref="turnstile" class="mt-2"></div>
       <p v-if="jobs.email" class="small mt-2 mb-0 text-success-emphasis">
         Reports will go to <strong>{{ jobs.email }}</strong>.
       </p>
       <p class="small text-muted mt-2 mb-0">Emails are sent only to the address you enter, max 5/day.</p>
-      <div v-if="emailError" class="alert alert-danger py-2 small mt-2 mb-0" role="alert">{{ emailError }}</div>
     </section>
 
     <section class="jobs-section">
@@ -30,20 +40,21 @@
         These run in a Celery worker (Redis queue). The worker renders the e-mail from your sandbox's data.
       </p>
       <div class="d-flex flex-wrap gap-2">
-        <button type="button" class="btn btn-outline-success btn-sm" :disabled="!jobs.email || !!starting" @click="start('monthly_report')">
+        <button type="button" class="btn btn-outline-success btn-sm" data-testid="job-monthly" :disabled="!jobs.email || !!starting || jobWait > 0" @click="start('monthly_report')">
           <span v-if="starting === 'monthly_report'" class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
           Send me a monthly report
         </button>
-        <button type="button" class="btn btn-outline-success btn-sm" :disabled="!jobs.email || !!starting" @click="start('daily_reminder')">
+        <button type="button" class="btn btn-outline-success btn-sm" data-testid="job-daily" :disabled="!jobs.email || !!starting || jobWait > 0" @click="start('daily_reminder')">
           <span v-if="starting === 'daily_reminder'" class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
           Send today's reminder
         </button>
       </div>
+      <p v-if="jobWait > 0" class="small text-muted mt-2 mb-0" data-testid="job-wait">Too many requests. Try again in {{ jobWait }} s</p>
       <p v-if="!jobs.email" class="small text-muted mt-2 mb-0">Save an address first.</p>
       <div v-if="jobError" class="alert alert-danger py-2 small mt-2 mb-0" role="alert">{{ jobError }}</div>
-      <div v-if="jobs.loaded && !jobs.emailEnabled" class="alert alert-info py-2 small mt-2 mb-0" role="note">
-        <strong>Preview mode.</strong> No e-mail provider is configured on this server, so nothing is delivered:
-        jobs run for real, and the rendered message lands in the outbox below.
+      <div v-if="jobs.loaded && !jobs.emailEnabled" data-testid="preview-note" class="alert alert-info py-2 small mt-2 mb-0" role="note">
+        <strong>Preview mode:</strong> e-mails are rendered but not delivered on this deployment.
+        Jobs still run for real, and the rendered message lands in the outbox below.
       </div>
     </section>
 
@@ -66,9 +77,13 @@
           <div class="small text-muted">
             to {{ job.to_email || "—" }} · {{ job.updated_at || job.created_at }}
           </div>
-          <div v-if="job.detail" class="small text-muted job-detail">{{ job.detail }}</div>
+          <div v-if="job.detail" class="small text-muted job-detail" :class="{ 'is-failed': job.status === 'failed' }">{{ job.detail }}</div>
         </li>
       </ul>
+      <div v-if="jobs.pollStopped" class="alert alert-warning py-2 small mt-2 mb-0" role="status" data-testid="poll-stopped">
+        Stopped auto-refreshing after 3 minutes; a job still looks busy.
+        <button type="button" class="btn btn-link btn-sm p-0 align-baseline" @click="refreshJobs">Refresh</button>
+      </div>
       <div v-if="jobs.error" class="alert alert-danger py-2 small mt-2 mb-0" role="alert">{{ jobs.error }}</div>
     </section>
 
@@ -85,11 +100,15 @@
           >
             <span class="fw-semibold">{{ message.subject }}</span>
             <span class="small text-muted d-block">to {{ message.to_email }} · {{ message.created_at }}</span>
+            <span v-if="message.truncated" class="small outbox-truncated d-block">Preview truncated</span>
           </button>
         </li>
       </ul>
       <div v-if="selected" class="outbox-preview">
         <div class="small text-muted mb-1">Preview (sandboxed: scripts and links are disabled)</div>
+        <div v-if="selected.truncated" class="small outbox-truncated mb-1" data-testid="outbox-truncated">
+          Preview truncated: this message was cut to fit the size limit.
+        </div>
         <!-- sandbox="" blocks scripts, forms, popups and same-origin access. -->
         <iframe
           class="outbox-frame"
@@ -103,8 +122,8 @@
 </template>
 
 <script>
-import { demo, errorText } from "@/demo";
-import { enqueue, hasActiveJobs, jobs, loadJobs, loadOutbox, saveEmail } from "@/demoJobs";
+import { cooldownLeft, demo, errorText } from "@/demo";
+import { enqueue, hasActiveJobs, jobs, loadJobs, loadOutbox, refreshJobs, saveEmail } from "@/demoJobs";
 
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
 const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -150,8 +169,14 @@ export default {
     };
   },
   computed: {
+    emailWait() {
+      return cooldownLeft("/api/demo/email");
+    },
+    jobWait() {
+      return cooldownLeft("/api/demo/jobs");
+    },
     polling() {
-      return hasActiveJobs() && demo.drawer === "jobs";
+      return hasActiveJobs() && demo.drawer === "jobs" && !jobs.pollStopped;
     },
     selected() {
       if (!jobs.messages.length) return null;
@@ -181,6 +206,7 @@ export default {
     if (this.widgetId !== null && window.turnstile) window.turnstile.remove(this.widgetId);
   },
   methods: {
+    refreshJobs,
     kindLabel: (kind) => KIND_LABELS[kind] || kind,
     badgeClass(status) {
       return (

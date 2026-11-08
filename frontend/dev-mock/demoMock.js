@@ -11,6 +11,19 @@
 //   MOCK_EMAIL_ENABLED=true  jobs end as "sent" instead of "preview"
 //   POST /__mock/expire      forget every sandbox (next call answers 410)
 //   POST /__mock/sleep?s=10  go back to "waking" for 10 s (503 on health)
+//   POST /__mock/offline?s=10  like a spun-down Render instance: every request
+//                            (health included) is dropped at the network level
+//                            for 10 s, then the instance is back with NO
+//                            sandboxes (the next sandboxed call answers 410)
+//   POST /__mock/fail?status=429&path=/api/demo/sql&n=1&retry_after=7
+//                            the next n calls to path (or any /api path when
+//                            omitted) answer with that status (429 and 507 use
+//                            the real error bodies); /__mock/fail?clear=1 resets
+//   POST /__mock/stuck       the next enqueued job stays "queued" forever
+//   POST /__mock/stale?on=1  GET /api/demo/jobs flips queued/running jobs to
+//                            failed ("Timed out; please try again.")
+//   POST /__mock/truncate?on=1  db/sql/outbox answer with truncated: true
+//   GET  /__mock/log         requests seen (to check the single GET retry)
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 
@@ -85,6 +98,12 @@ export default function demoMockPlugin(env = {}) {
   let wakeUntil = Date.now() + Number(env.MOCK_WAKE_SECONDS ?? 6) * 1000;
   const emailEnabled = String(env.MOCK_EMAIL_ENABLED) === "true";
   const TTL = 60 * 60 * 1000;
+  let offlineUntil = 0;
+  let failRule = null; // { status, path, n, retryAfter }
+  let stuck = false;
+  let stale = false;
+  let truncate = false;
+  const log = [];
 
   const send = (res, status, body, headers = {}) => {
     res.statusCode = status;
@@ -140,6 +159,7 @@ export default function demoMockPlugin(env = {}) {
       kind, sb.visitorEmail, stamp(), stamp(), "waiting for a Celery worker");
     const setStatus = (status, detail) =>
       sandboxes.has(sb.id) && run(sb, "UPDATE jobs SET status = ?, updated_at = ?, detail = ? WHERE id = ?", status, stamp(), detail, id);
+    if (stuck) { stuck = false; return one(sb, "SELECT * FROM jobs WHERE id = ?", id); }
     setTimeout(() => setStatus("running", "rendering the e-mail"), 2500);
     setTimeout(() => {
       if (!sandboxes.has(sb.id)) return;
@@ -160,6 +180,30 @@ export default function demoMockPlugin(env = {}) {
     const path = url.pathname.replace(/\/+$/, "");
     const m = req.method;
 
+    if (path === "/__mock/offline") {
+      offlineUntil = Date.now() + Number(url.searchParams.get("s") || 10) * 1000;
+      sandboxes.clear(); // the instance restarts: the sandboxes are gone
+      return send(res, 200, { ok: true });
+    }
+    if (path === "/__mock/fail") {
+      const q = url.searchParams;
+      failRule = q.get("clear") ? null : { status: Number(q.get("status") || 500), path: q.get("path"), n: Number(q.get("n") || 1), retryAfter: Number(q.get("retry_after") || 5) };
+      return send(res, 200, { ok: true });
+    }
+    if (path === "/__mock/stuck") { stuck = true; return send(res, 200, { ok: true }); }
+    if (path === "/__mock/stale") { stale = url.searchParams.get("on") !== "0"; return send(res, 200, { ok: true }); }
+    if (path === "/__mock/truncate") { truncate = url.searchParams.get("on") !== "0"; return send(res, 200, { ok: true }); }
+    if (path === "/__mock/log") return send(res, 200, { log });
+    if (path.startsWith("/api/")) {
+      log.push(`${m} ${path}`);
+      if (failRule && failRule.n > 0 && (!failRule.path || failRule.path === path) && path !== "/api/health") {
+        failRule.n -= 1;
+        const { status, retryAfter } = failRule;
+        if (status === 429) return send(res, 429, { error: "Too many requests. Please try again later.", code: "rate_limited", retry_after: retryAfter }, { "Retry-After": String(retryAfter) });
+        if (status === 507) return send(res, 507, { error: "This demo sandbox is full. Reset the demo to start fresh.", code: "sandbox_full" });
+        return fail(res, status, `Mock failure ${status}`);
+      }
+    }
     if (path === "/__mock/expire") { sandboxes.clear(); return send(res, 200, { ok: true }); }
     if (path === "/__mock/sleep") { wakeUntil = Date.now() + Number(url.searchParams.get("s") || 10) * 1000; return send(res, 200, { ok: true }); }
     if (path === "/api/health") {
@@ -210,6 +254,7 @@ export default function demoMockPlugin(env = {}) {
             cols.map((c) => (c === "password" ? MASK : r[c])));
           return { name, columns: cols, rows: data, row_count: total, truncated: total > 200 };
         });
+        if (truncate) tables.forEach((t) => (t.truncated = true));
         return send(res, 200, { tables });
       }
       case "POST /api/demo/sql": {
@@ -226,7 +271,7 @@ export default function demoMockPlugin(env = {}) {
           const cols = stmt.columns().map((c) => c.name);
           const all = stmt.all();
           const out = all.slice(0, 200).map((r) => Object.values(r).map((v, i) => (cols[i] === "password" ? null : v)));
-          return send(res, 200, { columns: cols, rows: out, truncated: all.length > 200, elapsed_ms: Date.now() - t0 });
+          return send(res, 200, { columns: cols, rows: out, truncated: truncate || all.length > 200, elapsed_ms: Date.now() - t0 });
         } catch (e) {
           return fail(res, 400, String(e.message || e), { code: "sql_error" });
         } finally {
@@ -236,6 +281,7 @@ export default function demoMockPlugin(env = {}) {
       case "POST /api/demo/email": {
         const e = String(body.email || "").trim();
         if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return fail(res, 400, "Please enter a valid e-mail address");
+        if (/@(nomail|invalid)\./.test(e)) return fail(res, 400, "That e-mail domain doesn't seem to receive mail.");
         sb.visitorEmail = e;
         return send(res, 200, { email: e });
       }
@@ -247,9 +293,10 @@ export default function demoMockPlugin(env = {}) {
         return send(res, 202, { job: enqueueJob(sb, body.kind) });
       }
       case "GET /api/demo/jobs":
+        if (stale) run(sb, "UPDATE jobs SET status = 'failed', detail = 'Timed out; please try again.' WHERE status IN ('queued','running')");
         return send(res, 200, { jobs: rows(sb, "SELECT * FROM jobs ORDER BY id DESC"), email: sb.visitorEmail, email_enabled: emailEnabled });
       case "GET /api/demo/outbox":
-        return send(res, 200, { messages: rows(sb, "SELECT * FROM outbox ORDER BY id DESC") });
+        return send(res, 200, { messages: rows(sb, "SELECT * FROM outbox ORDER BY id DESC").map((r) => ({ ...r, truncated: truncate })) });
 
       // ---- catalog (public) ----
       case "GET /api/user_dashboard":
@@ -435,6 +482,7 @@ export default function demoMockPlugin(env = {}) {
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url, "http://localhost");
         if (!url.pathname.startsWith("/api/") && !url.pathname.startsWith("/__mock/")) return next();
+        if (Date.now() < offlineUntil && !url.pathname.startsWith("/__mock/")) return req.destroy(); // dropped connection
         let raw = "";
         for await (const chunk of req) raw += chunk;
         let body = {};

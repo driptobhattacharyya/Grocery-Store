@@ -23,7 +23,9 @@
       </li>
     </ul>
 
-    <div v-if="db.error && tab !== SQL" class="alert alert-danger m-2 py-2 small" role="alert">{{ db.error }}</div>
+    <div v-if="db.error && tab !== SQL" class="alert alert-danger m-2 py-2 small" role="alert">
+      {{ db.error }}
+    </div>
 
     <!-- Table view -->
     <div v-if="tab !== SQL" class="db-view">
@@ -31,7 +33,9 @@
       <template v-else-if="current">
         <div class="db-meta small text-muted">
           <span>{{ current.row_count }} row{{ current.row_count === 1 ? "" : "s" }}</span>
-          <span v-if="current.truncated"> · showing the first {{ current.rows.length }}</span>
+          <span v-if="current.truncated" data-testid="db-truncated">
+            · Showing a partial result (size limit): the first {{ current.rows.length }} rows
+          </span>
           <span v-if="db.removed[current.name]" class="db-removed">
             {{ db.removed[current.name] }} row{{ db.removed[current.name] === 1 ? "" : "s" }} removed
           </span>
@@ -73,8 +77,8 @@
     <!-- SQL console -->
     <div v-else class="db-view db-sql">
       <p class="small text-muted mb-2">
-        Read-only console on your private sandbox: one <code>SELECT</code> at a time, 200 rows max.
-        Passwords are never returned.
+        Read-only console on your private sandbox: one <code>SELECT</code> at a time, 200 rows max,
+        20 queries per minute, 0.5 s per query. Passwords are never returned.
       </p>
       <div class="chips mb-2">
         <button
@@ -97,9 +101,9 @@
         @keydown.meta.enter.prevent="run"
       ></textarea>
       <div class="d-flex align-items-center gap-2 my-2">
-        <button type="button" class="btn btn-primary btn-sm" :disabled="sqlConsole.running" @click="run">
+        <button type="button" class="btn btn-primary btn-sm" data-testid="sql-run" :disabled="sqlConsole.running || wait > 0" @click="run">
           <span v-if="sqlConsole.running" class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
-          Run
+          {{ wait > 0 ? `Run (wait ${wait} s)` : "Run" }}
         </button>
         <span class="small text-muted">Ctrl/Cmd + Enter</span>
         <span v-if="sqlConsole.result" class="small text-muted ms-auto">
@@ -111,8 +115,8 @@
         {{ sqlConsole.error }}
       </div>
       <div v-if="sqlConsole.result" class="db-scroll">
-        <p v-if="sqlConsole.result.truncated" class="small text-warning-emphasis m-1">
-          Showing the first {{ sqlConsole.result.rows.length }} rows only (row cap reached).
+        <p v-if="sqlConsole.result.truncated" data-testid="sql-truncated" class="small text-warning-emphasis m-1">
+          Showing a partial result (size limit): {{ sqlConsole.result.rows.length }} rows shown.
         </p>
         <table class="table table-sm db-table">
           <thead>
@@ -138,8 +142,8 @@
 </template>
 
 <script>
-import { demo } from "@/demo";
-import { db, refreshDb, runSql, sqlConsole } from "@/demoDb";
+import { cooldownLeft, demo } from "@/demo";
+import { SQL_PATH, db, refreshDb, runSql, sqlConsole } from "@/demoDb";
 
 const SQL = "__sql__";
 
@@ -172,9 +176,12 @@ const EXAMPLES = [
 
 export default {
   data() {
-    return { tab: "", SQL, EXAMPLES, db, sqlConsole };
+    return { tab: "", SQL, EXAMPLES, db, sqlConsole, demo };
   },
   computed: {
+    wait() {
+      return cooldownLeft(SQL_PATH);
+    },
     current() {
       return this.db.tables.find((table) => table.name === this.tab) || null;
     },

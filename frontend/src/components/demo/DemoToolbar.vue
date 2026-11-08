@@ -47,6 +47,10 @@
 
       <span class="demo-note">Demo data resets after an hour of inactivity</span>
     </div>
+    <div v-if="demo.full" class="demo-banner" role="alert" data-testid="full-banner">
+      <ResetNotice />
+      <button type="button" class="btn-close btn-close-white" aria-label="Dismiss" @click="demo.full = ''"></button>
+    </div>
   </div>
 
   <DemoDrawer :open="demo.drawer === 'db'" title="Database (your private sandbox)" @close="demo.drawer = null">
@@ -85,6 +89,7 @@
 import DemoDrawer from "./DemoDrawer.vue";
 import DbPanel from "./DbPanel.vue";
 import JobsPanel from "./JobsPanel.vue";
+import ResetNotice from "./ResetNotice.vue";
 import { createSession, demo, errorText, hasSandbox, switchSession } from "@/demo";
 import { db, refreshDb } from "@/demoDb";
 import { getRole, homeFor } from "@/auth";
@@ -97,7 +102,7 @@ const ROLES = [
 ];
 
 export default {
-  components: { DemoDrawer, DbPanel, JobsPanel },
+  components: { DemoDrawer, DbPanel, JobsPanel, ResetNotice },
   data() {
     return {
       demo,
@@ -128,6 +133,9 @@ export default {
   watch: {
     "demo.sandboxEpoch"() {
       this.baseline();
+    },
+    "demo.resetRequest"() {
+      this.confirmReset = true;
     },
   },
   mounted() {
