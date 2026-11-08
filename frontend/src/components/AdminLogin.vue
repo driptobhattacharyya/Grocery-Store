@@ -12,6 +12,8 @@
           type="username"
           class="form-control"
           name="username"
+          autocomplete="username"
+          maxlength="254"
           aria-describedby="emailHelp"
           required
         />
@@ -22,6 +24,8 @@
           v-model="password"
           class="form-control"
           type="password"
+          autocomplete="current-password"
+          maxlength="128"
           required
         />
       </div>

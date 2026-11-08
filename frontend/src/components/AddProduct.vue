@@ -11,6 +11,7 @@
           name="name"
           aria-describedby="emailHelp"
           v-model="newProduct.name"
+          maxlength="60"
           required
         />
       </div>
@@ -56,6 +57,7 @@
           v-model="newProduct.unit"
           class="form-control"
           name="unit"
+          maxlength="20"
           required
         />
       </div>

@@ -24,6 +24,7 @@
                 v-model="newCategory"
                 class="form-control"
                 name="newCategory"
+                maxlength="40"
               />
               <div
                 href="/admin/add_category"

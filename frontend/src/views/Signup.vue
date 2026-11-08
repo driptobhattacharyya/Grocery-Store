@@ -11,6 +11,7 @@
           class="form-control"
           name="name"
           v-model="name"
+          maxlength="60"
           aria-describedby="emailHelp"
           required
         />
@@ -33,6 +34,7 @@
           v-model="address"
           class="form-control"
           name="address"
+          maxlength="200"
           aria-describedby="emailHelp"
           required
         />
@@ -44,6 +46,8 @@
           type="email"
           class="form-control"
           name="email"
+          autocomplete="email"
+          maxlength="254"
           aria-describedby="emailHelp"
           required
         />
@@ -54,6 +58,8 @@
           v-model="password"
           class="form-control"
           type="password"
+          autocomplete="new-password"
+          maxlength="128"
           required
         />
       </div>
