@@ -128,3 +128,13 @@ Each rendered e-mail is also stored in the sandbox table `outbox(id, job_id, to_
 - **DB panel**: a drawer with table tabs; rows changed since the previous snapshot are highlighted; it refreshes after every mutating API call. It also hosts the read-only SQL console with a few example queries.
 - **Jobs panel**: the e-mail address form (with Turnstile when `VITE_TURNSTILE_SITE_KEY` is set), buttons for the monthly report and the daily reminder, a live list of jobs that polls every 2 s while any job is queued or running, and the outbox preview.
 - **Signup inside the demo**: a visitor can sign up as a new user, apply to become a manager, switch to admin and approve themselves, then use "switch to my account" to become their own manager account.
+
+
+## Limits and errors added for the public deployment
+
+- **Sandbox full**: any write that would grow a sandbox past `SANDBOX_MAX_PAGES` (default 2000 pages, about 8 MB) answers `507 {"error": "This demo sandbox is full. Reset the demo to start fresh.", "code": "sandbox_full"}`.
+- **Field lengths** (400 with a message such as "Product name is too long (at most 60 characters)"): product name 60, unit 20, category 40, user name 60, address 200, e-mail 254, password 128.
+- **429** from the rate limiter: `{"error": "Too many requests. Please try again later.", "code": "rate_limited", "retry_after": <seconds>}` plus a `Retry-After` header, which CORS exposes.
+- **`POST /api/demo/email`**: 400 "That e-mail domain doesn't seem to receive mail." when the domain has no MX/A/AAAA record (DNS failures accept the address). The local part may only contain `a-z 0-9 . _ + -`.
+- **`GET /api/demo/db`, `/api/demo/outbox`, `POST /api/demo/sql`**: bounded responses. Cells are cut to 2 KB with the marker `…(truncated)`; `truncated: true` says rows were left out; an outbox message carries `truncated` too.
+- **`GET /api/demo/jobs`**: a job `queued`/`running` for more than `JOB_STALE_SECONDS` (180) comes back `failed` with detail "Timed out; please try again."

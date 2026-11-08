@@ -23,7 +23,7 @@ These accounts are public. In particular, anyone can log in as the demo manager 
 |---------|-------------------|-----------------------|------------------------------------------|
 | Shopper | `/login`          | `demo@grocery.app`    | `demo1234`                               |
 | Manager | `/login`          | `manager@grocery.app` | `manager1234`                            |
-| Admin   | `/admin/login`    | `admin`               | value of `ADMIN_PASSWORD` (default `password`) |
+| Admin   | `/admin/login`    | `admin`               | `admin1234` (`DEMO_ADMIN_PASSWORD`)      |
 
 ## Run locally
 
@@ -50,12 +50,11 @@ docker build -t grocery-store .
 docker run -p 8000:8000 \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e JWT_SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADMIN_PASSWORD=choose-a-strong-one \
   grocery-store
 # open http://localhost:8000
 ```
 
-The image runs with `APP_ENV=production`, so it refuses to start with missing or default secrets (keys must be at least 32 characters, admin password at least 8 and not `password`).
+The image runs with `APP_ENV=production`, so it refuses to start with missing or default secrets (keys must be at least 32 characters; with `DEMO_MODE=false` also an admin password of at least 8 characters that is not `password`).
 
 Production mode trusts one reverse proxy's `X-Forwarded-For` header (right for Render). When nothing sits in front of the container, as with plain `docker run` or a VPS without a reverse proxy, add `-e TRUSTED_PROXY_COUNT=0`; otherwise clients can send a fake `X-Forwarded-For` and get around the login rate limit.
 
@@ -65,7 +64,7 @@ Nothing reads a `.env` file automatically. To use one, copy `.env.example` to `.
 
 The app ships as one Docker image: the Vue app is built and served by Flask/Gunicorn, so there is one service and no CORS setup.
 
-**Render (free tier):** push to GitHub, then in Render choose **New + → Blueprint** and select this repo. `render.yaml` generates the secret keys; set `ADMIN_PASSWORD` when prompted.
+**Render (free tier):** push to GitHub, then in Render choose **New + → Blueprint** and select this repo. `render.yaml` generates the secret keys. `ADMIN_PASSWORD` is not needed in demo mode (the default); see [docs/DEPLOY.md](docs/DEPLOY.md) for the optional e-mail and Turnstile settings.
 
 After the first deploy, open the service's logs and look at one access-log line. It starts with the request's `X-Forwarded-For` header (see `gunicorn.conf.py`). Check that the number of addresses added by Render's proxy matches `TRUSTED_PROXY_COUNT` (1 by default): with a single client address in the header, 1 is right. If Render ever adds more hops, raise the count to match, or the rate limiter will see a proxy address instead of the client's.
 
@@ -85,7 +84,7 @@ The main settings are below; `.env.example` documents every variable (rate limit
 | `SECRET_KEY`      | dev value                | Flask secret. **Set in production.**             |
 | `JWT_SECRET_KEY`  | `SECRET_KEY`             | Signs auth tokens. **Set in production.**        |
 | `ADMIN_USERNAME`  | `admin`                  | Admin login                                      |
-| `ADMIN_PASSWORD`  | `password`               | Admin password. **Set in production.**           |
+| `ADMIN_PASSWORD`  | `password`               | Admin password with `DEMO_MODE=false` only (required in production then); ignored in demo mode |
 | `DATABASE_PATH`   | `./data/grocery.db`      | SQLite file, created and seeded if missing       |
 | `REDIS_URL`       | unset (in-memory cache)  | Enables the Redis cache and the Celery broker    |
 | `CORS_ORIGINS`    | unset                    | Comma-separated origins, only if the frontend is hosted separately |

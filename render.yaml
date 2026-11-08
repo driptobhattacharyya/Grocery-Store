@@ -4,6 +4,7 @@ services:
     name: grocery-store
     runtime: docker
     plan: free
+    region: oregon   # must match the Key Value region below (private network)
     healthCheckPath: /api/health
     envVars:
       - key: APP_ENV
@@ -12,8 +13,6 @@ services:
         generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
-      - key: ADMIN_PASSWORD
-        sync: false   # set this in the Render dashboard (min. 8 chars, not "password")
       - key: LOG_LEVEL
         value: INFO
       # Render puts one proxy in front of the service.
@@ -24,6 +23,15 @@ services:
         sync: false   # set in the Render dashboard
       - key: EMAIL_FROM
         value: "Grocery Store Demo <demo@mail.driptobhattacharyya.com>"
+      # --- Cloudflare Turnstile (human check on the e-mail form) ---
+      # A PAIR: TURNSTILE_SECRET_KEY (here, in Render) and VITE_TURNSTILE_SITE_KEY (the frontend
+      # build). Create a widget for grocery-store.driptobhattacharyya.com in the Cloudflare dashboard
+      # (Turnstile > Add widget). Until the secret is set, real e-mail sending stays OFF (preview
+      # mode) even with RESEND_API_KEY; see docs/DEPLOY.md.
+      - key: TURNSTILE_SECRET_KEY
+        sync: false   # set in the Render dashboard
+      - key: TURNSTILE_EXPECTED_HOSTNAME
+        value: grocery-store.driptobhattacharyya.com
       - key: CORS_ORIGINS
         value: https://grocery-store.driptobhattacharyya.com
       # Broker for the Celery worker that runs inside the same container.
@@ -37,4 +45,9 @@ services:
   - type: keyvalue
     name: grocery-store-redis
     plan: free
+    region: oregon
+    # Celery broker: never evict. Every cache and rate-limit key carries a TTL and the data is
+    # tiny, so memory does not fill up; if it ever did, writes fail loudly (the app degrades:
+    # cache off, limiter in memory, jobs answer 503) instead of Redis silently dropping queued jobs.
+    maxmemoryPolicy: noeviction
     ipAllowList: []   # empty = internal (private network) access only

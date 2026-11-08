@@ -218,3 +218,30 @@ def test_single_database_mode_still_works(tmp_path):
     result = subprocess.run([sys.executable, "-c", SINGLE_DB_SCRIPT], cwd=ROOT, env=clean,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# --- render.yaml ---------------------------------------------------------------------------------
+
+def _render_yaml():
+    yaml = pytest.importorskip("yaml")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "render.yaml")) as f:
+        return yaml.safe_load(f)
+
+
+def test_render_yaml_regions_plans_and_redis_policy():
+    services = {s["name"]: s for s in _render_yaml()["services"]}
+    web, redis = services["grocery-store"], services["grocery-store-redis"]
+    assert web["region"] == redis["region"] == "oregon"
+    assert web["plan"] == redis["plan"] == "free"
+    assert redis["maxmemoryPolicy"] == "noeviction"
+
+
+def test_render_yaml_env_vars():
+    web = next(s for s in _render_yaml()["services"] if s["type"] == "web")
+    env = {e["key"]: e for e in web["envVars"]}
+    assert "ADMIN_PASSWORD" not in env
+    assert env["TURNSTILE_SECRET_KEY"]["sync"] is False
+    assert env["RESEND_API_KEY"]["sync"] is False
+    assert env["TURNSTILE_EXPECTED_HOSTNAME"]["value"] == "grocery-store.driptobhattacharyya.com"
+    assert env["REDIS_URL"]["fromService"]["name"] == "grocery-store-redis"
