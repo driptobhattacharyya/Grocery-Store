@@ -9,7 +9,7 @@
         <label for="exampleInputEmail1" class="form-label">Email</label>
         <input
           v-model="email"
-          type="username"
+          type="email"
           class="form-control"
           name="email"
           autocomplete="username"

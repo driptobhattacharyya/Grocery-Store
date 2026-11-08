@@ -7,7 +7,7 @@
       <div class="mb-3">
         <label for="name" class="form-label">Name</label>
         <input
-          type="username"
+          type="text"
           class="form-control"
           name="name"
           v-model="name"
@@ -19,7 +19,7 @@
       <div class="mb-3">
         <label for="number" class="form-label">Phone Number</label>
         <input
-          type="username"
+          type="tel"
           class="form-control"
           name="phoneno"
           v-model="phoneNo"
@@ -30,7 +30,7 @@
       <div class="mb-3">
         <label for="Address" class="form-label">Address</label>
         <input
-          type="username"
+          type="text"
           v-model="address"
           class="form-control"
           name="address"
