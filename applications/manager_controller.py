@@ -10,11 +10,11 @@ import io
 from flask import Response, current_app as app, jsonify
 from flask_jwt_extended import create_access_token, jwt_required
 
-from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key
+from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key, token_claims
 from applications.caching import cache
 from applications.cart_functions import product_exists
 from applications.categories_functions import get_category_id_by_name
-from applications.database import get_db, get_db_instance_id
+from applications.database import get_db
 from applications.http_errors import (
     BadRequest, Forbidden, NotFound, api_errors, iso_date, json_body, number, only_ok,
     positive_int, require_str,
@@ -76,9 +76,7 @@ def manager_login_route():  # admin login
     if not isinstance(password, str) or not password:
         raise BadRequest("Password is required")
     manager_login(email, password)
-    access_token = create_access_token(
-        identity=email, additional_claims={"role": "admin", "dbid": get_db_instance_id()}
-    )
+    access_token = create_access_token(identity=email, additional_claims=token_claims("admin"))
     return jsonify({'access_token': access_token})
 
 

@@ -50,6 +50,23 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=float(_env("JWT_ACCESS_TOKEN_EXPIRES_HOURS", "12")))
     JWT_ERROR_MESSAGE_KEY = "error"
 
+    # --- Demo mode: one private SQLite database ("sandbox") per visitor --------------
+    # With DEMO_MODE on (the default) every API request except /api/health,
+    # /api/ready and POST /api/demo/session must carry `X-Sandbox-Id`; the
+    # database for that request is the visitor's sandbox (see sandbox.py).
+    # With DEMO_MODE=false the app uses the single DATABASE_PATH file as before.
+    DEMO_MODE = _env_bool("DEMO_MODE", True)
+    SANDBOX_DIR = _env("SANDBOX_DIR", os.path.join(BASE_DIR, "data", "sandboxes"))
+    # Template DB (schema + seed) that sandboxes are copied from; rebuilt at every start.
+    TEMPLATE_DB_PATH = _env("TEMPLATE_DB_PATH", os.path.join(SANDBOX_DIR, "template.db"))
+    SANDBOX_TTL_MINUTES = float(_env("SANDBOX_TTL_MINUTES", "60"))
+    SANDBOX_MAX = _env_int("SANDBOX_MAX", 200)
+    # Password of the admin account inside every sandbox. Deliberately public:
+    # the UI shows it. Unrelated to the operator's ADMIN_PASSWORD.
+    DEMO_ADMIN_PASSWORD = _env("DEMO_ADMIN_PASSWORD", "admin1234")
+    DEMO_SESSION_RATE_LIMIT = _env("DEMO_SESSION_RATE_LIMIT", "20 per hour")
+    DEMO_SQL_RATE_LIMIT = _env("DEMO_SQL_RATE_LIMIT", "60 per minute")
+
     # Admin account (seeded into the `managers` table on every start).
     # Lower-cased like every login e-mail/username (see normalize_email).
     ADMIN_USERNAME = _env("ADMIN_USERNAME", "admin").lower()
@@ -114,8 +131,12 @@ def validate_config(config):
         elif len(config.get(key)) < 32:
             problems.append(f"{key} is too short (at least 32 characters required)")
 
+    # In demo mode the admin of each sandbox uses DEMO_ADMIN_PASSWORD (public by
+    # design), so the operator's ADMIN_PASSWORD is not used and not required.
     admin_password = _env("ADMIN_PASSWORD")
-    if not admin_password:
+    if config.get("DEMO_MODE", True):
+        pass
+    elif not admin_password:
         problems.append("ADMIN_PASSWORD is not set")
     elif admin_password == DEV_ADMIN_PASSWORD:
         problems.append('ADMIN_PASSWORD must not be "password"')

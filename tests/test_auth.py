@@ -186,6 +186,8 @@ def test_role_is_checked_against_database_not_token(app, client, execute, manage
 RATE_LIMIT_SCRIPT = textwrap.dedent("""
     import app
     client = app.app.test_client()
+    sid = client.post("/api/demo/session", json={"role": "user"}).get_json()["sandbox_id"]
+    client.environ_base["HTTP_X_SANDBOX_ID"] = sid
     statuses = [client.post("/api/login", json={"email": "demo@grocery.app", "password": "wrong"}).status_code
                 for _ in range(4)]
     blocked = client.post("/api/login", json={"email": "demo@grocery.app", "password": "demo1234"})
@@ -203,7 +205,7 @@ def test_auth_endpoints_are_rate_limited(tmp_path):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = {k: v for k, v in os.environ.items() if not k.startswith(("RATELIMIT", "AUTH_RATE"))}
     env.update(RATELIMIT_ENABLED="true", AUTH_RATE_LIMIT="3 per minute", APP_ENV="development",
-               DATABASE_PATH=str(tmp_path / "rl.db"), LOG_LEVEL="ERROR")
+               SANDBOX_DIR=str(tmp_path / "sbx"), LOG_LEVEL="ERROR")
     result = subprocess.run([sys.executable, "-c", RATE_LIMIT_SCRIPT], cwd=root, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr

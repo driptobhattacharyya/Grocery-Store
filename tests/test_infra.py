@@ -19,9 +19,14 @@ def test_ready(client):
     assert response.status_code == 200 and response.get_json() == {"status": "ok"}
 
 
+def test_ready_needs_no_sandbox(app, client):
+    client.sandbox_id = None
+    assert client.get("/api/ready").status_code == 200
+
+
 def test_ready_reports_database_failure(app, client, monkeypatch, tmp_path):
-    # A path inside a missing directory can't be opened by SQLite.
-    monkeypatch.setitem(app.config, "DATABASE_PATH", str(tmp_path / "missing" / "db.sqlite"))
+    # In demo mode the probe checks the template DB; a path in a missing directory can't be opened.
+    monkeypatch.setitem(app.config, "TEMPLATE_DB_PATH", str(tmp_path / "missing" / "db.sqlite"))
     response = client.get("/api/ready")
     assert response.status_code == 503 and response.get_json() == {"status": "unavailable"}
 
@@ -143,17 +148,20 @@ def test_frontend_not_built(client):
 
 def _import_app(tmp_path, **env):
     clean = {k: v for k, v in os.environ.items()
-             if k not in ("SECRET_KEY", "JWT_SECRET_KEY", "ADMIN_PASSWORD", "APP_ENV")}
-    clean.update(DATABASE_PATH=str(tmp_path / "prod.db"), LOG_LEVEL="ERROR", **env)
+             if k not in ("SECRET_KEY", "JWT_SECRET_KEY", "ADMIN_PASSWORD", "APP_ENV", "DEMO_MODE")}
+    clean.update(DATABASE_PATH=str(tmp_path / "prod.db"), SANDBOX_DIR=str(tmp_path / "sbx"),
+                 LOG_LEVEL="ERROR", **env)
     return subprocess.run([sys.executable, "-c", "import app"], cwd=ROOT, env=clean,
                           capture_output=True, text=True, timeout=120)
 
 
-STRONG = {"SECRET_KEY": "s" * 48, "JWT_SECRET_KEY": "j" * 48, "ADMIN_PASSWORD": "a-strong-admin-password"}
+STRONG = {"SECRET_KEY": "s" * 48, "JWT_SECRET_KEY": "j" * 48, "ADMIN_PASSWORD": "a-strong-admin-password",
+          "DEMO_MODE": "false"}  # single-DB mode checks the operator's ADMIN_PASSWORD
 
 
 @pytest.mark.parametrize("env,problem", [
-    ({}, "SECRET_KEY is not set"),
+    ({"DEMO_MODE": "false"}, "SECRET_KEY is not set"),
+    ({"DEMO_MODE": "true"}, "SECRET_KEY is not set"),
     ({**STRONG, "SECRET_KEY": "short"}, "SECRET_KEY is too short"),
     ({**STRONG, "JWT_SECRET_KEY": "dev-secret-change-me-do-not-use-in-production"}, "JWT_SECRET_KEY uses the"),
     ({**STRONG, "ADMIN_PASSWORD": "password"}, 'ADMIN_PASSWORD must not be "password"'),
@@ -172,6 +180,41 @@ def test_production_starts_with_strong_secrets(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_production_demo_mode_starts_without_admin_password(tmp_path):
+    env = {k: v for k, v in STRONG.items() if k not in ("ADMIN_PASSWORD", "DEMO_MODE")}
+    result = _import_app(tmp_path, APP_ENV="production", DEMO_MODE="true", **env)
+    assert result.returncode == 0, result.stderr
+
+
 def test_production_sends_hsts(app, client, monkeypatch):
     monkeypatch.setitem(app.config, "IS_PRODUCTION", True)
     assert "max-age=" in client.get("/api/health").headers["Strict-Transport-Security"]
+
+
+# --- single-database mode (DEMO_MODE=false) -----------------------------------------
+
+SINGLE_DB_SCRIPT = """
+import app
+c = app.app.test_client()
+assert c.get("/api/ready").status_code == 200
+token = c.post("/api/login", json={"email": "demo@grocery.app", "password": "demo1234"}).get_json()["access_token"]
+h = {"Authorization": "Bearer " + token}
+from flask_jwt_extended import decode_token
+with app.app.app_context():
+    claims = decode_token(token)
+assert "dbid" in claims and "sbx" not in claims
+assert c.get("/api/shopping_cart", headers=h).status_code == 200  # no X-Sandbox-Id needed
+assert c.post("/api/admin/login", json={"email": "admin", "password": "s3cret-admin"}).status_code == 200
+assert c.post("/api/admin/login", json={"email": "admin", "password": "admin1234"}).status_code == 401
+assert c.post("/api/demo/session", json={"role": "user"}).status_code == 404
+print("ok")
+"""
+
+
+def test_single_database_mode_still_works(tmp_path):
+    clean = {k: v for k, v in os.environ.items() if k not in ("SECRET_KEY", "JWT_SECRET_KEY", "APP_ENV")}
+    clean.update(DEMO_MODE="false", DATABASE_PATH=str(tmp_path / "single.db"), ADMIN_PASSWORD="s3cret-admin",
+                 LOG_LEVEL="ERROR", RATELIMIT_ENABLED="false")
+    result = subprocess.run([sys.executable, "-c", SINGLE_DB_SCRIPT], cwd=ROOT, env=clean,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -3,7 +3,6 @@ database they were issued for, atomic cart writes, CSV escaping, request size
 limit, e-mail normalisation and admin-account cleanup."""
 import csv
 import io
-import os
 import sqlite3
 import threading
 
@@ -15,55 +14,46 @@ from applications.manager_controller import _csv_safe
 from helpers import ADMIN, APPLE, DEMO_USER, SPRITE, SPRITE_STOCK, assert_error, bearer, mint_token
 
 
-def _reseed(app):
-    """What a redeploy / spin-down on an ephemeral disk does: the database
-    file disappears and the next start creates and seeds a new one."""
-    path = app.config["DATABASE_PATH"]
-    for suffix in ("", "-wal", "-shm"):
-        if os.path.exists(path + suffix):
-            os.remove(path + suffix)
-    init_db(app)
+# --- tokens vs. the sandbox they were issued for -----------------------------------
 
-
-# --- tokens vs. the database they were issued for ---------------------------------
-
-def test_login_tokens_carry_the_database_id(app, client, query):
+def test_login_tokens_carry_the_sandbox_id(app, client, sandbox_id):
     from flask_jwt_extended import decode_token
 
     token = client.post("/api/login", json={"email": DEMO_USER[0], "password": DEMO_USER[1]}).get_json()["access_token"]
     admin = client.post("/api/admin/login", json={"email": ADMIN[0], "password": ADMIN[1]}).get_json()["access_token"]
-    (dbid,), = query("SELECT value FROM meta WHERE key = 'db_instance_id'")
-    assert len(dbid) == 32
     with app.app_context():
-        assert decode_token(token)["dbid"] == dbid
-        assert decode_token(admin)["dbid"] == dbid
+        assert decode_token(token)["sbx"] == sandbox_id
+        assert decode_token(admin)["sbx"] == sandbox_id
 
 
-def test_tokens_from_before_a_reseed_are_rejected(app, client, shopper_token, manager_token, admin_token, query):
-    (old_id,), = query("SELECT value FROM meta WHERE key = 'db_instance_id'")
-    _reseed(app)
-    (new_id,), = query("SELECT value FROM meta WHERE key = 'db_instance_id'")
-    assert new_id != old_id
-
-    # The demo accounts exist again in the new database, but the old tokens are dead.
-    assert_error(client.get("/api/shopping_cart", headers=bearer(shopper_token)), 401)
-    assert_error(client.post("/api/add_to_cart", json={"product_id": APPLE, "quantity": 1},
-                             headers=bearer(shopper_token)), 401)
-    assert_error(client.post("/api/shopping_cart/checkout", headers=bearer(shopper_token)), 401)
-    assert_error(client.get("/api/manager/dashboard", headers=bearer(manager_token)), 401)
-    assert_error(client.get("/api/admin/manager_requests", headers=bearer(admin_token)), 401)
-
-    # Logging in again works.
-    token = client.post("/api/login", json={"email": DEMO_USER[0], "password": DEMO_USER[1]}).get_json()["access_token"]
-    assert client.get("/api/shopping_cart", headers=bearer(token)).status_code == 200
+def test_token_from_another_sandbox_is_rejected(app, client, sandbox_client, new_sandbox, shopper_token,
+                                                manager_token, admin_token):
+    other = sandbox_client(new_sandbox())  # the same demo accounts exist there too
+    assert_error(other.get("/api/shopping_cart", headers=bearer(shopper_token)), 401)
+    assert_error(other.post("/api/add_to_cart", json={"product_id": APPLE, "quantity": 1},
+                            headers=bearer(shopper_token)), 401)
+    assert_error(other.post("/api/shopping_cart/checkout", headers=bearer(shopper_token)), 401)
+    assert_error(other.get("/api/manager/dashboard", headers=bearer(manager_token)), 401)
+    assert_error(other.get("/api/admin/manager_requests", headers=bearer(admin_token)), 401)
+    # ... but they keep working in their own sandbox, and logging in at the other one works.
+    assert client.get("/api/shopping_cart", headers=bearer(shopper_token)).status_code == 200
+    token = other.post("/api/login", json={"email": DEMO_USER[0], "password": DEMO_USER[1]}).get_json()["access_token"]
+    assert other.get("/api/shopping_cart", headers=bearer(token)).status_code == 200
 
 
-def test_old_token_cannot_read_a_re_registered_account(app, client, signup, login):
+def test_token_of_an_expired_sandbox_gets_410(app, client, store, sandbox_id, shopper_token):
+    store.delete(sandbox_id)
+    response = client.get("/api/shopping_cart", headers=bearer(shopper_token))
+    assert response.status_code == 410 and response.get_json()["code"] == "sandbox_expired"
+
+
+def test_old_token_cannot_read_a_same_named_account_elsewhere(app, client, sandbox_client, new_sandbox, signup, login):
     signup("someone@example.com", "secret123", name="Original Owner")
     old_token = login("someone@example.com", "secret123")
-    _reseed(app)
-    signup("someone@example.com", "different9", name="New Owner")
-    assert_error(client.get("/api/dashboard", headers=bearer(old_token)), 401)
+    other = sandbox_client(new_sandbox())
+    other.post("/api/signup", json={"name": "New Owner", "email": "someone@example.com", "password": "different9",
+                                    "phoneNo": "1234567890"})
+    assert_error(other.get("/api/dashboard", headers=bearer(old_token)), 401)
 
 
 def test_token_for_a_deleted_user_is_rejected(client, signup, login, execute):
@@ -85,42 +75,60 @@ def test_admin_token_is_checked_against_the_managers_table(app, client):
     assert_error(client.get("/api/admin/manager_requests", headers=bearer(shopper_as_admin)), 401)
 
 
-def test_token_without_database_id_is_rejected(app, client):
+def test_token_without_sandbox_claim_is_rejected(app, client):
     from flask_jwt_extended import create_access_token
 
     with app.app_context():
         legacy = create_access_token(identity=DEMO_USER[0], additional_claims={"role": "user"})
+        legacy_dbid = create_access_token(identity=DEMO_USER[0], additional_claims={"role": "user", "dbid": "x"})
     assert_error(client.get("/api/shopping_cart", headers=bearer(legacy)), 401)
+    assert_error(client.get("/api/shopping_cart", headers=bearer(legacy_dbid)), 401)
 
 
-def test_database_id_survives_restarts(app, query):
+def test_database_id_survives_restarts(app, sandbox_path, query):
     (before,), = query("SELECT value FROM meta WHERE key = 'db_instance_id'")
-    init_db(app)  # a restart with the database still on disk
+    init_db(app, path=sandbox_path)  # a restart with the database still on disk
     assert query("SELECT value FROM meta WHERE key = 'db_instance_id'") == [(before,)]
+
+
+def test_every_sandbox_has_its_own_database_id(store, sandbox_id, new_sandbox):
+    ids = set()
+    for sid in (sandbox_id, new_sandbox()):
+        conn = sqlite3.connect(store.path_for(sid))
+        ids.add(conn.execute("SELECT value FROM meta WHERE key = 'db_instance_id'").fetchone()[0])
+        conn.close()
+    assert len(ids) == 2
 
 
 # --- admin account cleanup ----------------------------------------------------------
 
-def test_startup_removes_admin_rows_for_other_usernames(app, client, admin_token, execute, query, monkeypatch):
-    execute("INSERT INTO managers (email, password) VALUES ('old-admin', 'x')")
+def test_startup_removes_admin_rows_for_other_usernames(app, tmp_path, monkeypatch):
+    path = str(tmp_path / "admins.db")
+    init_db(app, path=path, admin_password="whatever-pass")
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO managers (email, password) VALUES ('old-admin', 'x')")
+    conn.commit()
     monkeypatch.setitem(app.config, "ADMIN_USERNAME", "boss")
-    init_db(app)
-    assert query("SELECT email FROM managers") == [("boss",)]
-    # The old admin can neither log in nor keep using an earlier token.
-    assert_error(client.post("/api/admin/login", json={"email": ADMIN[0], "password": ADMIN[1]}), 401)
-    assert_error(client.get("/api/admin/manager_requests", headers=bearer(admin_token)), 401)
-    assert client.post("/api/admin/login", json={"email": "boss", "password": ADMIN[1]}).status_code == 200
+    init_db(app, path=path, admin_password="whatever-pass")
+    assert conn.execute("SELECT email FROM managers").fetchall() == [("boss",)]
+    conn.close()
+
+
+def test_admin_uses_the_demo_admin_password(client, app):
+    assert app.config["DEMO_ADMIN_PASSWORD"] == ADMIN[1]
+    assert client.post("/api/admin/login", json={"email": ADMIN[0], "password": ADMIN[1]}).status_code == 200
+    assert_error(client.post("/api/admin/login", json={"email": ADMIN[0], "password": "password"}), 401)
 
 
 # --- cart integrity -----------------------------------------------------------------
 
-def test_concurrent_add_to_cart_does_not_lose_updates(app, shopper_token, query):
+def test_concurrent_add_to_cart_does_not_lose_updates(sandbox_client, shopper_token, query):
     n = 8
     barrier = threading.Barrier(n)
     statuses = []
 
     def add():
-        client = app.test_client()
+        client = sandbox_client()
         barrier.wait()
         response = client.post("/api/add_to_cart", json={"product_id": APPLE, "quantity": 1},
                                headers=bearer(shopper_token))
@@ -137,14 +145,14 @@ def test_concurrent_add_to_cart_does_not_lose_updates(app, shopper_token, query)
                  DEMO_USER[0], APPLE) == [(1, n)]
 
 
-def test_concurrent_add_to_cart_respects_stock(app, shopper_token, query):
+def test_concurrent_add_to_cart_respects_stock(sandbox_client, shopper_token, query):
     # SPRITE_STOCK + 4 parallel adds of 1: exactly SPRITE_STOCK may succeed.
     n = SPRITE_STOCK + 4
     barrier = threading.Barrier(n)
     statuses = []
 
     def add():
-        client = app.test_client()
+        client = sandbox_client()
         barrier.wait()
         statuses.append(client.post("/api/add_to_cart", json={"product_id": SPRITE, "quantity": 1},
                                     headers=bearer(shopper_token)).status_code)
@@ -165,13 +173,13 @@ def test_cart_has_a_unique_index_per_user_and_product(app, execute):
         execute("INSERT INTO cart (email, product_id, quantity) VALUES (?, ?, 1)", DEMO_USER[0], APPLE)
 
 
-def test_startup_merges_duplicate_cart_rows_from_older_databases(app, execute, query):
+def test_startup_merges_duplicate_cart_rows_from_older_databases(app, sandbox_path, execute, query):
     execute("DROP INDEX cart_email_product")
     for quantity in (2, 3, 4):
         execute("INSERT INTO cart (email, product_id, quantity) VALUES (?, ?, ?)", DEMO_USER[0], APPLE, quantity)
     execute("INSERT INTO cart (email, product_id, quantity) VALUES (?, ?, 1)", DEMO_USER[0], SPRITE)
 
-    init_db(app)
+    init_db(app, path=sandbox_path)
 
     assert query("SELECT product_id, quantity FROM cart WHERE email = ? ORDER BY product_id", DEMO_USER[0]) == [
         (APPLE, 9), (SPRITE, 1)]
