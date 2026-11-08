@@ -240,6 +240,24 @@ def test_queued_running_then_final_status_on_a_thread(app, client, set_email, mo
     assert _jobs(client)["jobs"][0]["updated_at"] >= _jobs(client)["jobs"][0]["created_at"]
 
 
+def test_counter_store_outage_is_a_503_not_a_500(app, client, set_email, monkeypatch):
+    """Redis down: POST /api/demo/jobs says the queue is unavailable (JSON 503) and leaves no stuck job."""
+    set_email()
+
+    class Down:
+        def incr(self, key):
+            raise ConnectionError("redis is down")
+
+    monkeypatch.setitem(app.extensions, "email_counters", Down())
+    assert_error(client.post("/api/demo/jobs", json={"kind": "monthly_report"}), 503)
+    assert _jobs(client)["jobs"] == []
+
+
+def test_rate_limiter_fails_open_when_its_store_errors(app):
+    import sys
+    assert sys.modules[app.import_name].limiter._swallow_errors is True
+
+
 def test_jobs_and_outbox_are_listed_newest_first(client, set_email):
     set_email()
     _post_job(client, "daily_reminder")

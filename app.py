@@ -66,7 +66,10 @@ app.teardown_appcontext(close_db)
 
 # In-memory storage is per process, which is consistent because gunicorn runs
 # a single worker (see gunicorn.conf.py); with REDIS_URL it is shared.
-limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"])
+# swallow_errors: if the shared store (Redis) blips, requests go through
+# unlimited instead of failing with a 500 on every rate-limited endpoint.
+limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"],
+                  swallow_errors=True)
 
 if app.config["DEMO_MODE"]:
     sandbox.init_sandboxes(app, passive=app.config["PROCESS_ROLE"] == "worker")  # template DB + sandbox registry; no single shared DB

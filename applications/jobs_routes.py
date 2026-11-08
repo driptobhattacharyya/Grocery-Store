@@ -82,7 +82,13 @@ def enqueue_job(kind, account=None, order_id=None):
     to_email = visitor_email(db)
     if not to_email:
         raise BadRequest("Enter your e-mail address first")
-    token = reserve(app, to_email, request.remote_addr, count_global=delivery_configured())
+    try:
+        token = reserve(app, to_email, request.remote_addr, count_global=delivery_configured())
+    except EmailLimitReached:
+        raise
+    except Exception:  # the counter store (Redis) is down
+        log.exception("Could not count the e-mail limits")
+        raise QueueUnavailable("The job queue is unavailable right now. Please try again shortly.") from None
     try:
         now = backend_tasks.now_iso()
         cursor = db.execute("INSERT INTO jobs (kind, status, to_email, created_at, updated_at) "
