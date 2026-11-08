@@ -2,6 +2,7 @@ import logging
 import os
 import sqlite3
 import sys
+import time
 
 from flask import Flask, abort, g, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -69,7 +70,7 @@ if app.config["CORS_ORIGINS"]:
         app,
         origins=app.config["CORS_ORIGINS"],
         allow_headers=["Authorization", "Content-Type", "X-Sandbox-Id"],
-        expose_headers=["Content-Disposition"],
+        expose_headers=["Content-Disposition", "Retry-After"],
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         max_age=600,
     )
@@ -77,10 +78,12 @@ app.teardown_appcontext(close_db)
 
 # In-memory storage is per process, which is consistent because gunicorn runs
 # a single worker (see gunicorn.conf.py); with REDIS_URL it is shared.
-# swallow_errors: if the shared store (Redis) blips, requests go through
-# unlimited instead of failing with a 500 on every rate-limited endpoint.
+# If the shared store (Redis) fails, errors are swallowed and limiting continues from process
+# memory (in_memory_fallback_enabled); the store is retried with exponential back-off. Socket
+# timeouts (RATELIMIT_STORAGE_OPTIONS) keep a blackholed Redis from hanging requests.
 limiter = Limiter(client_key, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"],
-                  swallow_errors=True, default_limits=[app.config["RATELIMIT_DEFAULT"]],
+                  swallow_errors=True, in_memory_fallback_enabled=True,
+                  storage_options=app.config["RATELIMIT_STORAGE_OPTIONS"], default_limits=[app.config["RATELIMIT_DEFAULT"]],
                   default_limits_exempt_when=lambda: request.method in ("GET", "HEAD", "OPTIONS"))
 
 if app.config["DEMO_MODE"]:
@@ -215,6 +218,17 @@ def _only_spa_matches(exc):
     return endpoint == "spa"
 
 
+def _retry_after_seconds(response):
+    """Whole seconds until the exhausted limit resets (60 if unknown)."""
+    try:
+        return max(1, int(limiter.current_limit.reset_at - time.time()))
+    except Exception:
+        try:
+            return max(1, int(response.headers["Retry-After"]))
+        except (KeyError, ValueError):
+            return 60
+
+
 @app.errorhandler(HTTPException)
 def _http_error(exc):
     if not _is_api_request():
@@ -222,11 +236,13 @@ def _http_error(exc):
     if exc.code == 405 and _only_spa_matches(exc):
         exc = NotFound()
     response = exc.get_response()
+    body = {}
     if exc.code == 429:
-        message = "Too many attempts. Please wait a minute and try again."
+        body = {"code": "rate_limited", "retry_after": _retry_after_seconds(response)}
+        message = "Too many requests. Please try again later."
     else:
         message = exc.description or exc.name
-    response.data = jsonify({"error": message}).get_data()
+    response.data = jsonify({"error": message, **body}).get_data()
     response.content_type = "application/json"
     return response
 

@@ -8,7 +8,7 @@ from flask import current_app as app, jsonify, request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 
 from applications.auth import per_user_cache_key, public_cache_key, token_claims
-from applications.caching import cache
+from applications.caching import cache, safe_cache_clear
 from applications.cart_functions import (
     checkout_cart, delete_cart_item, fetch_cart_items_by_email, insert_cart_item, update_cart_item,
 )
@@ -81,7 +81,7 @@ def add_to_cart():
         raise BadRequest("quantity is required")
     quantity = positive_int(data.get('quantity'), "Quantity")
     insert_cart_item(get_jwt_identity(), product_id, quantity)
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Product added to the cart successfully"})
 
 
@@ -95,7 +95,7 @@ def update_product():
         raise BadRequest("quantity is required")
     quantity = positive_int(data.get('quantity'), "Quantity", allow_zero=True)
     update_cart_item(get_jwt_identity(), product_id, quantity)
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Product quantity updated successfully."})
 
 
@@ -105,7 +105,7 @@ def update_product():
 def delete_product():
     product_id = _product_id(json_body())
     delete_cart_item(get_jwt_identity(), product_id)
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Product deleted successfully."})
 
 
@@ -116,7 +116,7 @@ def checkout():
     # The total is computed from the cart and current prices on the server;
     # anything the client sends in the body is ignored.
     order_id, items, total = checkout_cart(get_jwt_identity())
-    cache.clear()
+    safe_cache_clear()
     enqueue_order_confirmation(order_id)  # no-op without a visitor e-mail; never fails the checkout
     return jsonify({
         "success": "Checkout successful",
@@ -190,7 +190,7 @@ def signup_route():
 @api_errors
 def apply_manager():
     add_manager_apply(get_jwt_identity())
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Applied for manager status."})
 
 

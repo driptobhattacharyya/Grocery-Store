@@ -11,7 +11,7 @@ from flask import Response, current_app as app, jsonify
 from flask_jwt_extended import create_access_token, jwt_required
 
 from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key, token_claims
-from applications.caching import cache
+from applications.caching import cache, safe_cache_clear
 from applications.cart_functions import product_exists
 from applications.categories_functions import get_category_id_by_name
 from applications.database import get_db
@@ -97,7 +97,7 @@ def add_product_route():
         fields['category_id'], fields['product_name'], fields['quantity'], fields['manufacture_date'],
         fields['expiry_date'], fields['price'], fields['unit'],
     )
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Product added to the category."}), 201
 
 
@@ -115,7 +115,7 @@ def edit_product():
         product_id, fields['product_name'], fields['category_id'], fields['quantity'], fields['price'],
         fields['unit'], fields['manufacture_date'], fields['expiry_date'],
     )
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Product updated."})
 
 
@@ -125,7 +125,7 @@ def edit_product():
 def remove_product_route():
     _require_manager_or_admin()
     remove_product_from_db(_required_id(json_body(), 'product_id'))
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Product deleted."})
 
 
@@ -135,7 +135,7 @@ def remove_product_route():
 def remove_category():
     _require_admin()
     remove_category_from_db(_required_id(json_body(), 'categoryID'))
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Category deleted successfully"})
 
 
@@ -146,7 +146,7 @@ def add_category():
     _require_admin()
     category_name = require_str(json_body(), 'category_name', "Category name", MAX_CATEGORY)
     add_category_to_db(category_name)
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Category added successfully"}), 201
 
 
@@ -208,7 +208,7 @@ def _manager_email():
 def accept_manager():
     _require_admin()
     approve_manager(_manager_email())
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Manager request accepted."})
 
 
@@ -218,5 +218,5 @@ def accept_manager():
 def reject_manager():
     _require_admin()
     deny_manager(_manager_email())
-    cache.clear()
+    safe_cache_clear()
     return jsonify({"success": "Manager request rejected."})

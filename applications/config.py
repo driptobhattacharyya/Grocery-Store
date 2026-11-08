@@ -77,9 +77,16 @@ class Config:
 
     # Caching: Redis when REDIS_URL is set, in-process memory otherwise.
     REDIS_URL = _env("REDIS_URL")
+    # Redis calls time out after 2 s instead of hanging (a blackholed Redis), and the cache
+    # degrades to "no cache" on any error (see applications/caching.py).
+    REDIS_SOCKET_OPTIONS = {"socket_connect_timeout": 2, "socket_timeout": 2}
     if REDIS_URL:
-        CACHE_TYPE = "RedisCache"
+        CACHE_TYPE = "applications.caching.ResilientRedisCache"
         CACHE_REDIS_URL = REDIS_URL
+        CACHE_OPTIONS = dict(REDIS_SOCKET_OPTIONS)
+        # clear() deletes only keys with this prefix (never FLUSHDB: Redis also holds the
+        # Celery queue, the rate-limit counters and the e-mail counters).
+        CACHE_KEY_PREFIX = "grocery_cache_"
     else:
         CACHE_TYPE = "SimpleCache"
     CACHE_DEFAULT_TIMEOUT = 300
@@ -89,6 +96,11 @@ class Config:
     AUTH_RATE_LIMIT = _env("AUTH_RATE_LIMIT", "10 per minute; 100 per hour")
     RATELIMIT_STORAGE_URI = _env("RATELIMIT_STORAGE_URI") or REDIS_URL or "memory://"
     RATELIMIT_HEADERS_ENABLED = True
+    # If the limiter's store (Redis) fails, keep limiting from process memory rather than
+    # erroring or going unlimited; socket timeouts stop a blackholed Redis from hanging requests.
+    RATELIMIT_SWALLOW_ERRORS = True
+    RATELIMIT_IN_MEMORY_FALLBACK_ENABLED = True
+    RATELIMIT_STORAGE_OPTIONS = dict(REDIS_SOCKET_OPTIONS)
     # Applied per client to every mutating request (POST/PUT/DELETE/PATCH), on top of the
     # stricter per-route limits below. GET/HEAD/OPTIONS are not counted.
     RATELIMIT_DEFAULT = _env("RATELIMIT_DEFAULT", "300 per minute")
