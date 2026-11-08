@@ -10,6 +10,7 @@ from jwt.exceptions import PyJWTError
 
 from applications import backend_tasks
 from applications.database import get_db
+from applications.demo_routes import OUTBOX_HTML_MAX, OUTBOX_RESPONSE_BUDGET, TRUNCATED_MARK, _display_cell
 from applications.email_limits import EmailLimitReached, release, reserve
 from applications.http_errors import ApiError, BadRequest, Unauthorized, api_errors, json_body
 from applications.mail_service import delivery_configured, email_enabled_for_ui, http_post_json
@@ -164,7 +165,24 @@ def demo_jobs_list():
 @app.get("/api/demo/outbox")
 @api_errors
 def demo_outbox():
-    rows = get_db().execute(
-        "SELECT id, job_id, to_email, subject, html, created_at FROM outbox ORDER BY id DESC LIMIT 50").fetchall()
-    keys = ("id", "job_id", "to_email", "subject", "html", "created_at")
-    return jsonify({"messages": [dict(zip(keys, r)) for r in rows]})
+    """Stored e-mails, newest first. Bounded: one body is cut to OUTBOX_HTML_MAX and the
+    bodies together to OUTBOX_RESPONSE_BUDGET (further messages come back with an empty
+    html and ``truncated: true``)."""
+    cursor = get_db().execute(
+        "SELECT id, job_id, to_email, subject, html, created_at FROM outbox ORDER BY id DESC LIMIT 50")
+    messages, used = [], 0
+    for id_, job_id, to_email, subject, html, created_at in cursor:
+        subject = _display_cell(subject, 300)[0]
+        to_email = _display_cell(to_email, 320)[0]
+        truncated = False
+        html = html if isinstance(html, str) else str(html)
+        room = OUTBOX_RESPONSE_BUDGET - used
+        limit = min(OUTBOX_HTML_MAX, max(room, 0))
+        if len(html) > limit:
+            html = html[:limit] + (TRUNCATED_MARK if limit else "")
+            truncated = True
+        used += len(html)
+        messages.append({"id": id_, "job_id": job_id, "to_email": to_email, "subject": subject, "html": html,
+                         "created_at": created_at, "truncated": truncated})
+    cursor.close()
+    return jsonify({"messages": messages})

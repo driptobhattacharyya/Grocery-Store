@@ -65,7 +65,7 @@ class Config:
     # the UI shows it. Unrelated to the operator's ADMIN_PASSWORD.
     DEMO_ADMIN_PASSWORD = _env("DEMO_ADMIN_PASSWORD", "admin1234")
     DEMO_SESSION_RATE_LIMIT = _env("DEMO_SESSION_RATE_LIMIT", "20 per hour")
-    DEMO_SQL_RATE_LIMIT = _env("DEMO_SQL_RATE_LIMIT", "60 per minute")
+    DEMO_SQL_RATE_LIMIT = _env("DEMO_SQL_RATE_LIMIT", "20 per minute")
 
     # Admin account (seeded into the `managers` table on every start).
     # Lower-cased like every login e-mail/username (see normalize_email).

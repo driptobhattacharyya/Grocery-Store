@@ -86,7 +86,7 @@ Read-only SQL console. Needs `X-Sandbox-Id`.
   - exactly one statement per request;
   - a 200-row cap;
   - a ~1 s time limit through `set_progress_handler`.
-- Rate-limited (default `60 per minute`).
+- Rate-limited (default `20 per minute`, 0.5 s time limit, responses capped at 256 KB with each cell cut to 2 KB; `truncated: true` when anything was cut).
 
 ### E-mail and background jobs (Celery)
 All of these need `X-Sandbox-Id`. Jobs are stored in a sandbox table `jobs(id, kind, status, to_email, created_at, updated_at, detail)`:

@@ -12,7 +12,7 @@ from flask_jwt_extended import create_access_token
 from applications.database import DEMO_MANAGER, DEMO_USER, get_db
 from applications.http_errors import ApiError, BadRequest, NotFound, api_errors, json_body
 from applications.login_manager import normalize_email
-from applications.sandbox import get_store
+from applications.sandbox import SandboxExpired, get_store
 from applications.store_manager import manager_check
 from applications.user_info import fetch_user_info
 
@@ -25,6 +25,14 @@ def _demo_endpoints_need_demo_mode():
 ROLES = ("user", "manager", "admin")
 REDACTED = "••••••"  # six bullets
 MAX_ROWS = 200
+# Response-size bounds (the free tier has 512 MB of RAM): every displayed cell is cut to
+# MAX_CELL_CHARS and rows are only fetched while the running byte budget lasts.
+MAX_CELL_CHARS = 2048
+TRUNCATED_MARK = "…(truncated)"
+SQL_RESPONSE_BUDGET = 256 * 1024     # bytes of cell data in one /api/demo/sql response
+DB_TABLE_BUDGET = 64 * 1024          # ... per table in /api/demo/db
+OUTBOX_HTML_MAX = 64 * 1024          # one e-mail body in /api/demo/outbox
+OUTBOX_RESPONSE_BUDGET = 256 * 1024  # all e-mail bodies together
 
 # Tables shown in the DB panel (everything except `meta`), in a fixed order.
 # `used_coupons` is not in the contract's list but is an app table too.
@@ -34,6 +42,37 @@ DB_TABLES = ("users", "user_profiles", "store_manager", "managers", "categories"
 
 def _is_secret_column(name):
     return "password" in (name or "").lower()
+
+
+def _display_cell(value, limit=MAX_CELL_CHARS):
+    """JSON-safe, size-bounded form of one cell. Returns ``(value, approx_bytes)``."""
+    if isinstance(value, (bytes, bytearray)):
+        value = f"<blob {len(value)} bytes>"
+    elif isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        value = str(value)
+    if isinstance(value, str):
+        if len(value) > limit:
+            value = value[:limit] + TRUNCATED_MARK
+        return value, len(value)
+    return value, 8
+
+
+def _take_rows(cursor, max_rows, budget, transform=None):
+    """Fetch rows one at a time while the row count and the byte budget allow.
+    Returns ``(rows, truncated)``; ``truncated`` is true if more rows existed."""
+    rows, used = [], 0
+    while True:
+        row = cursor.fetchone()
+        if row is None:
+            return rows, False
+        if len(rows) >= max_rows or used >= budget:
+            return rows, True
+        out = []
+        for index, value in enumerate(row):
+            value, size = transform(index, value) if transform else _display_cell(value)
+            used += size
+            out.append(value)
+        rows.append(out)
 
 
 # --- sessions ----------------------------------------------------------------------
@@ -131,10 +170,13 @@ def demo_db():
             continue
         secret = [_is_secret_column(c) for c in columns]
         quoted = ", ".join(f'"{c}"' for c in columns)
-        fetched = db.execute(f'SELECT {quoted} FROM "{table}" ORDER BY rowid LIMIT ?', (MAX_ROWS + 1,)).fetchall()
-        truncated = len(fetched) > MAX_ROWS
-        rows = [[REDACTED if hide and value is not None else value for hide, value in zip(secret, row)]
-                for row in fetched[:MAX_ROWS]]
+        cursor = db.execute(f'SELECT {quoted} FROM "{table}" ORDER BY rowid')
+
+        def transform(index, value, secret=secret):
+            return (REDACTED, 6) if secret[index] and value is not None else _display_cell(value)
+
+        rows, truncated = _take_rows(cursor, MAX_ROWS, DB_TABLE_BUDGET, transform)
+        cursor.close()
         count = db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
         tables.append({"name": table, "columns": columns, "rows": rows, "row_count": count,
                        "truncated": truncated})
@@ -144,9 +186,9 @@ def demo_db():
 # --- read-only SQL console -------------------------------------------------------------
 
 MAX_SQL_LENGTH = 5000
-SQL_TIME_LIMIT = 1.0  # seconds
-# Results above this size are refused rather than built (e.g. zeroblob(1e9)).
-SQL_MAX_VALUE_BYTES = 1_000_000
+SQL_TIME_LIMIT = 0.5  # seconds
+# SQLite refuses to build any string/blob/row above this size (e.g. printf('%.*c', 900000, 'a')).
+SQL_MAX_VALUE_BYTES = 100_000
 
 _ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
 _DENIED_FUNCTIONS = {"load_extension"}
@@ -181,8 +223,11 @@ def _check_single_statement(sql):
 
 
 def _open_readonly(path):
-    conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=2,
-                           isolation_level=None)
+    try:
+        conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=2,
+                               isolation_level=None)
+    except sqlite3.Error:  # the sandbox file vanished (evicted / expired) since the request began
+        raise SandboxExpired() from None
     conn.set_authorizer(_authorizer)
     conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, SQL_MAX_VALUE_BYTES)
     conn.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_LENGTH)
@@ -193,14 +238,6 @@ def _open_readonly(path):
     except AttributeError:
         pass
     return conn
-
-
-def _jsonable(value):
-    if isinstance(value, (bytes, bytearray)):
-        return f"<blob {len(value)} bytes>"
-    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
-        return str(value)
-    return value
 
 
 @app.post("/api/demo/sql")
@@ -226,13 +263,13 @@ def demo_sql():
             columns = [d[0] for d in cursor.description] if cursor.description else []
             if not columns:
                 raise SqlError("Only SELECT queries are allowed")
-            fetched = cursor.fetchmany(MAX_ROWS + 1)
+            rows, truncated = _take_rows(cursor, MAX_ROWS, SQL_RESPONSE_BUDGET)
         except (sqlite3.Error, sqlite3.Warning) as exc:
+            if "unable to open" in str(exc):
+                raise SandboxExpired() from None
             raise SqlError(_sql_message(exc, time.monotonic() > deadline)) from None
     finally:
         conn.close()
-    truncated = len(fetched) > MAX_ROWS
-    rows = [[_jsonable(v) for v in row] for row in fetched[:MAX_ROWS]]
     return jsonify({"columns": columns, "rows": rows, "truncated": truncated,
                     "elapsed_ms": int((time.monotonic() - started) * 1000)})
 
@@ -240,9 +277,11 @@ def demo_sql():
 def _sql_message(exc, timed_out):
     text = str(exc)
     if timed_out or "interrupted" in text:
-        return "Query took too long (limit: 1 second)"
+        return f"Query took too long (limit: {SQL_TIME_LIMIT:g} seconds)"
     if "not authorized" in text or "prohibited" in text or "readonly" in text.lower():
         return "This console is read-only: only a single SELECT statement is allowed"
+    if "too big" in text:
+        return "A value in the result is too large (limit: 100 KB)"
     if "one statement" in text:
         return "Only one statement can be run at a time"
     return text
