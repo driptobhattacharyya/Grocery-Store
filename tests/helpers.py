@@ -2,7 +2,7 @@
 
 DEMO_USER = ("demo@grocery.app", "demo1234")
 DEMO_MANAGER = ("manager@grocery.app", "manager1234")
-ADMIN = ("admin", "password")
+ADMIN = ("admin", "admin1234")  # DEMO_ADMIN_PASSWORD default, used by every sandbox
 
 # Seeded product ids (see applications/database.py DEMO_CATALOG).
 APPLE, BANANA, SPRITE, MILK = 1, 2, 7, 8
@@ -14,14 +14,16 @@ def bearer(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def mint_token(identity, role="user", **kwargs):
-    """An access token like the login endpoints issue, including the "dbid"
-    claim of the current database. Call inside ``app.app_context()``."""
+# Set by the `sandbox_id` fixture: the sandbox of the running test.
+CURRENT_SANDBOX = None
+
+
+def mint_token(identity, role="user", sandbox_id=None, **kwargs):
+    """An access token like the login endpoints issue, carrying the "sbx" claim
+    of the test's sandbox (or ``sandbox_id``). Call inside ``app.app_context()``."""
     from flask_jwt_extended import create_access_token
 
-    from applications.database import get_db_instance_id
-
-    claims = {"role": role, "dbid": get_db_instance_id()}
+    claims = {"role": role, "sbx": sandbox_id or CURRENT_SANDBOX}
     claims.update(kwargs.pop("additional_claims", {}))
     return create_access_token(identity=identity, additional_claims=claims, **kwargs)
 
