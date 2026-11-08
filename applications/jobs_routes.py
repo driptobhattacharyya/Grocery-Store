@@ -176,6 +176,7 @@ def demo_jobs_create():
 @api_errors
 def demo_jobs_list():
     db = get_db()
+    backend_tasks.fail_stale_jobs(db, app.config["JOB_STALE_SECONDS"])
     rows = db.execute(f"SELECT {_JOB_COLUMNS} FROM jobs ORDER BY id DESC LIMIT 50").fetchall()
     return jsonify({"jobs": [_job_dict(r) for r in rows], "email": visitor_email(db),
                     "email_enabled": email_enabled_for_ui()})

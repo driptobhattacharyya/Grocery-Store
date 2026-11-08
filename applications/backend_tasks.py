@@ -31,8 +31,24 @@ USER_KINDS = ("monthly_report", "daily_reminder")  # what POST /api/demo/jobs ac
 DEFAULT_REPORT_ACCOUNT = "demo@grocery.app"
 
 
-def now_iso():
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def now_iso(offset_seconds=0):
+    moment = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=offset_seconds)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+STALE_DETAIL = "Timed out; please try again."
+
+
+def fail_stale_jobs(db, stale_seconds):
+    """Mark jobs that sat in ``queued``/``running`` for longer than ``stale_seconds`` as failed
+    (a lost Celery message, a crashed worker, a flushed Redis). Returns how many."""
+    now = now_iso()
+    cursor = db.execute(
+        "UPDATE jobs SET status = 'failed', detail = ?, updated_at = ? "
+        "WHERE status IN ('queued', 'running') AND updated_at < ?",
+        (STALE_DETAIL, now, now_iso(-stale_seconds)))
+    db.commit()
+    return cursor.rowcount
 
 
 # --- message content (reads the bound sandbox) ---------------------------------------
@@ -102,7 +118,15 @@ def execute_job(sandbox_id, job_id, kind, account=None, order_id=None):
             log.info("Job %s not found in sandbox %s...", job_id, str(sandbox_id)[:4])
             return "missing"
         to_email = row[0]
-        _set_status(job_id, "running")
+        # Idempotency guard: claim the job atomically. A task that Celery redelivers (lost ack,
+        # visibility timeout, restart) finds the job already running/finished/timed-out and must
+        # not send a second e-mail.
+        claimed = db.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'",
+                             (now_iso(), job_id))
+        db.commit()
+        if claimed.rowcount != 1:
+            log.info("Job %s skipped: not queued any more (duplicate delivery?)", job_id)
+            return "duplicate"
         try:
             subject, html = build_message(kind, account, order_id)
             outcome = send_email(to_email, subject, html)

@@ -137,3 +137,91 @@ def test_email_counters_stay_fail_closed(app, client, monkeypatch):
     monkeypatch.setattr(get_counters(app), "incr", boom)
     r = client.post("/api/demo/jobs", json={"kind": "daily_reminder"})
     assert r.status_code == 503 and r.get_json()["error"]
+
+
+# --- S6: stuck jobs and duplicate deliveries ---------------------------------------------------
+
+def _insert_job(execute, status, updated_at, kind="daily_reminder"):
+    execute("INSERT INTO jobs (kind, status, to_email, created_at, updated_at) VALUES (?, ?, 'v@example.com', ?, ?)",
+            kind, status, updated_at, updated_at)
+
+
+def test_stale_queued_and_running_jobs_are_failed_when_listed(app, client, execute, query):
+    import applications.backend_tasks as tasks
+    old, fresh = tasks.now_iso(-600), tasks.now_iso(-10)
+    _insert_job(execute, "queued", old)
+    _insert_job(execute, "running", old)
+    _insert_job(execute, "queued", fresh)
+    _insert_job(execute, "sent", old)
+    jobs = client.get("/api/demo/jobs").get_json()["jobs"]
+    by_id = {j["id"]: j for j in jobs}
+    assert [by_id[i]["status"] for i in (1, 2, 3, 4)] == ["failed", "failed", "queued", "sent"]
+    assert by_id[1]["detail"] == by_id[2]["detail"] == "Timed out; please try again."
+    assert by_id[3]["detail"] is None and by_id[4]["detail"] is None
+    assert query("SELECT status FROM jobs ORDER BY id") == [("failed",), ("failed",), ("queued",), ("sent",)]
+
+
+def test_stale_threshold_is_configurable(app, client, execute, monkeypatch):
+    import applications.backend_tasks as tasks
+    _insert_job(execute, "queued", tasks.now_iso(-30))
+    assert client.get("/api/demo/jobs").get_json()["jobs"][0]["status"] == "queued"
+    monkeypatch.setitem(app.config, "JOB_STALE_SECONDS", 10)
+    assert client.get("/api/demo/jobs").get_json()["jobs"][0]["status"] == "failed"
+
+
+def test_default_stale_seconds_is_180(app):
+    from applications.config import Config
+    assert Config.JOB_STALE_SECONDS == 180
+
+
+def _run_job(app, sandbox_id, job_id):
+    import applications.backend_tasks as tasks
+    with app.app_context():
+        return tasks.execute_job(sandbox_id, job_id, "daily_reminder")
+
+
+def test_a_redelivered_task_sends_nothing_twice(app, client, sandbox_id, monkeypatch, query):
+    import applications.backend_tasks as tasks
+    sent = []
+    monkeypatch.setattr(tasks, "send_email", lambda to, subject, html: sent.append(to) or "sent")
+    client.post("/api/demo/email", json={"email": "a@example.com"})
+    client.post("/api/demo/jobs", json={"kind": "daily_reminder"})       # inline: runs once
+    assert sent == ["a@example.com"]
+    assert _run_job(app, sandbox_id, 1) == "duplicate"                   # redelivery after success
+    assert sent == ["a@example.com"]
+    assert query("SELECT COUNT(*) FROM outbox") == [(1,)]
+
+
+@pytest.mark.parametrize("status", ["running", "failed", "sent", "preview"])
+def test_only_queued_jobs_are_run(app, sandbox_id, execute, query, monkeypatch, status):
+    import applications.backend_tasks as tasks
+    monkeypatch.setattr(tasks, "send_email", lambda *a: pytest.fail("must not send"))
+    _insert_job(execute, status, tasks.now_iso())
+    assert _run_job(app, sandbox_id, 1) == "duplicate"
+    assert query("SELECT status FROM jobs") == [(status,)]
+
+
+def test_a_job_that_timed_out_is_not_sent_by_a_late_delivery(app, client, sandbox_id, execute, monkeypatch):
+    import applications.backend_tasks as tasks
+    monkeypatch.setattr(tasks, "send_email", lambda *a: pytest.fail("must not send"))
+    _insert_job(execute, "queued", tasks.now_iso(-900))
+    client.get("/api/demo/jobs")                                        # marks it failed
+    assert _run_job(app, sandbox_id, 1) == "duplicate"
+
+
+def test_two_concurrent_deliveries_send_once(app, client, sandbox_id, execute, monkeypatch):
+    import threading
+    import applications.backend_tasks as tasks
+    sent = []
+    monkeypatch.setattr(tasks, "send_email", lambda to, s, h: sent.append(1) or "sent")
+    _insert_job(execute, "queued", tasks.now_iso())
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(_run_job(app, sandbox_id, 1))) for _ in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(sent) == 1 and sorted(results) == ["duplicate"] * 3 + ["sent"]
+
+
+def test_celery_visibility_timeout_is_five_minutes():
+    import celeryconfig
+    assert celeryconfig.broker_transport_options["visibility_timeout"] == 300

@@ -148,6 +148,9 @@ class Config:
     ALLOW_EMAIL_WITHOUT_TURNSTILE = _env_bool("ALLOW_EMAIL_WITHOUT_TURNSTILE", False)
     # Reject addresses whose domain has no MX/A/AAAA record (DNS timeouts accept the address).
     EMAIL_DOMAIN_CHECK = _env_bool("EMAIL_DOMAIN_CHECK", True)
+    # A job still queued/running after this many seconds is reported as failed
+    # ("Timed out; please try again.") when the jobs are listed.
+    JOB_STALE_SECONDS = _env_int("JOB_STALE_SECONDS", 180)
     DEMO_EMAIL_RATE_LIMIT = _env("DEMO_EMAIL_RATE_LIMIT", "20 per hour")
     DEMO_JOBS_RATE_LIMIT = _env("DEMO_JOBS_RATE_LIMIT", "30 per hour")
     # How jobs run: "celery" (worker + REDIS_URL broker; the default with REDIS_URL),
