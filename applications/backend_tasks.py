@@ -1,80 +1,168 @@
-from celery import shared_task
-from applications.mail_service import *
-from applications.database import *
-from jinja2 import Template
+"""Background e-mail jobs for the demo.
+
+A job is a row in the sandbox's ``jobs`` table: queued -> running -> sent | preview | failed.
+The rendered message goes into the sandbox's ``outbox`` table whether it was delivered or
+only previewed. Tasks receive the sandbox id and bind it explicitly (there is no request),
+so a task never mails anybody but the visitor address stored for that sandbox.
+
+How a job runs (``JOBS_EXECUTION``): ``celery`` (a worker on the REDIS_URL broker),
+``thread`` (a small in-process pool, the default without Redis) or ``inline`` (tests).
+
+The old tasks that e-mailed every registered user were removed: in a public demo they
+would mail whatever addresses visitors typed in at sign-up.
+"""
 import datetime
 import logging
+from concurrent.futures import ThreadPoolExecutor
+
+from celery import shared_task
+
+from applications.database import get_db
+from applications.email_templates import render
+from applications.mail_service import PREVIEW, EmailDisabled, MailError, send_email
+from applications.sandbox import SandboxExpired, bind_sandbox
 
 log = logging.getLogger(__name__)
 
-@shared_task(ignore_result=False)
-def say_hello():
-    log.info('Hello there!')
+KINDS = ("monthly_report", "daily_reminder", "order_confirmation")
+USER_KINDS = ("monthly_report", "daily_reminder")  # what POST /api/demo/jobs accepts
+DEFAULT_REPORT_ACCOUNT = "demo@grocery.app"
 
 
-# @shared_task(ignore_result=False)
-# def create_resource_csv():
-#     # get the stuff from db
-    
-#     csv_output = excel.make_response(stuff, ['product', 'price'], 'csv')
-#     filename="test.csv"
-    
-#     with open(filename, 'wb') as f:
-#         f.write(csv_output.data)
-    
-#     return filename
+def now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-def monthly_usage(email):
+
+# --- message content (reads the bound sandbox) ---------------------------------------
+
+def _order_confirmation(order_id):
     db = get_db()
-    cursor = db.cursor()
-    query = '''SELECT * FROM orders WHERE email = ? '''
-    cursor.execute(query, (email,))
-    all_orders = cursor.fetchall()
-    cursor.close()
-    total = 0
-    today = datetime.date.today()
-    start_of_last_month = today.replace(day=1) - datetime.timedelta(days=30)
+    order = db.execute("SELECT total_price FROM orders WHERE orderID = ?", (order_id,)).fetchone()
+    if order is None:
+        raise MailError("Order not found")
+    rows = db.execute(
+        """SELECT oi.product_name, oi.quantity, COALESCE(p.price, 0)
+           FROM order_items oi LEFT JOIN products p ON p.name = oi.product_name
+           WHERE oi.orderID = ? ORDER BY oi.order_itemID""", (order_id,)).fetchall()
+    items = [{"name": n, "quantity": q, "line_total": (q or 0) * price} for n, q, price in rows]
+    return render("order_confirmation", order_id=order_id, items=items, total=float(order[0] or 0))
 
-    for order in all_orders:
-        order_date = datetime.date.fromisoformat(order[2])
-        if order_date >= start_of_last_month:
-            total += order[3]
-    t = Template("""\
-    <html>
-        <head></head>
-        <body>
-            <p>Hi {{ email }},</p>
-            <p>You have ordered a total of {{ total }} INR in the past month.</p>
-            <p>Thanks!</p>
-        </body>
-    </html>
-    """)
-    return t.render(email=email, total=total)
 
-@shared_task(ignore_result=True)
-def daily_reminder():
+def _monthly_report(account):
+    """Orders of ``account`` (the identity that asked for the report, or the demo shopper)
+    over the last 30 days."""
+    since = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+    rows = get_db().execute(
+        "SELECT orderID, order_date, total_price FROM orders WHERE email = ? AND order_date >= ? "
+        "ORDER BY orderID DESC LIMIT 25", (account, since)).fetchall()
+    orders = [{"id": i, "date": d, "total": float(t or 0)} for i, d, t in rows]
+    return render("monthly_report", account=account, orders=orders, total=sum(o["total"] for o in orders))
+
+
+def _daily_reminder():
+    rows = get_db().execute(
+        """SELECT p.name, p.price, p.unit FROM products p JOIN inventory i ON i.productID = p.productID
+           WHERE i.quantity > 0 ORDER BY p.productID LIMIT 5""").fetchall()
+    return render("daily_reminder", products=[{"name": n, "price": float(p), "unit": u} for n, p, u in rows])
+
+
+def build_message(kind, account=None, order_id=None):
+    if kind == "order_confirmation":
+        return _order_confirmation(order_id)
+    if kind == "monthly_report":
+        return _monthly_report(account or DEFAULT_REPORT_ACCOUNT)
+    if kind == "daily_reminder":
+        return _daily_reminder()
+    raise MailError("Unknown job kind")
+
+
+# --- running a job ----------------------------------------------------------------------
+
+def _set_status(job_id, status, detail=None):
     db = get_db()
-    cursor = db.cursor()
-    subject = "Knock knock"
-    query = '''SELECT email FROM users WHERE email LIKE '%@%' '''
-    cursor.execute(query)
-    all_emails = cursor.fetchall()
-    cursor.close()
-    for email in all_emails:
-        send_message(email[0], subject, "Hey, we've been missing you!")
-    # send_message(to, subject, "hello")
-    return "OK"
+    db.execute("UPDATE jobs SET status = ?, detail = ?, updated_at = ? WHERE id = ?",
+               (status, detail, now_iso(), job_id))
+    db.commit()
 
 
-@shared_task(ignore_result=True)
-def monthly_report():
-    db = get_db()
-    cursor = db.cursor()
-    subject = "Monthly report"
-    query = '''SELECT email FROM users WHERE email LIKE '%@%' '''
-    cursor.execute(query)
-    all_emails = cursor.fetchall()
-    cursor.close()
-    for email in all_emails:
-        send_message(email[0], subject, monthly_usage(email[0]))
-    return "OK"
+def execute_job(sandbox_id, job_id, kind, account=None, order_id=None):
+    """Run one job. Needs an app context (Celery's FlaskTask and the thread path provide it)."""
+    try:
+        bind_sandbox(sandbox_id)
+    except SandboxExpired:
+        log.info("Job %s skipped: sandbox %s... expired", job_id, str(sandbox_id)[:4])
+        return "expired"
+    try:
+        db = get_db()
+        row = db.execute("SELECT to_email FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            log.info("Job %s not found in sandbox %s...", job_id, str(sandbox_id)[:4])
+            return "missing"
+        to_email = row[0]
+        _set_status(job_id, "running")
+        try:
+            subject, html = build_message(kind, account, order_id)
+            outcome = send_email(to_email, subject, html)
+        except EmailDisabled as exc:
+            _set_status(job_id, "failed", str(exc))
+            return "failed"
+        except MailError as exc:
+            _set_status(job_id, "failed", str(exc))
+            return "failed"
+        status = "preview" if outcome == PREVIEW else "sent"
+        detail = ("No e-mail provider configured: the message is only stored in the outbox."
+                  if status == "preview" else "Delivered to the e-mail provider.")
+        now = now_iso()
+        db.execute("INSERT INTO outbox (job_id, to_email, subject, html, created_at) VALUES (?, ?, ?, ?, ?)",
+                   (job_id, to_email, subject, html, now))
+        db.execute("UPDATE jobs SET status = ?, detail = ?, updated_at = ? WHERE id = ?",
+                   (status, detail, now, job_id))
+        db.commit()
+        return status
+    except SandboxExpired:
+        log.info("Job %s: sandbox %s... expired while running", job_id, str(sandbox_id)[:4])
+        return "expired"
+    except Exception:
+        log.exception("Job %s crashed", job_id)
+        try:
+            _set_status(job_id, "failed", "Unexpected error while sending")
+        except Exception:
+            log.exception("Could not mark job %s as failed", job_id)
+        return "failed"
+
+
+@shared_task(name="grocery.run_email_job", ignore_result=True)
+def run_email_job(sandbox_id, job_id, kind, account=None, order_id=None):
+    return execute_job(sandbox_id, job_id, kind, account, order_id)
+
+
+_pool = None
+
+
+def _thread_pool():
+    global _pool
+    if _pool is None:
+        _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="email-job")
+    return _pool
+
+
+def _run_in_app(app, *args):
+    try:
+        with app.app_context():
+            execute_job(*args)
+    except Exception:
+        log.exception("Job thread crashed")
+
+
+def dispatch(app, sandbox_id, job_id, kind, account=None, order_id=None):
+    """Hand a queued job to its executor. Raises if the Celery broker is unreachable."""
+    app = getattr(app, "_get_current_object", lambda: app)()  # a real app, not the current_app proxy
+    mode = app.config["JOBS_EXECUTION"]
+    args = (sandbox_id, job_id, kind, account, order_id)
+    if mode == "celery":
+        run_email_job.apply_async(
+            args, retry=True, retry_policy={"max_retries": 1, "interval_start": 0, "interval_max": 0.2})
+    elif mode == "inline":
+        _run_in_app(app, *args)
+    else:
+        _thread_pool().submit(_run_in_app, app, *args)

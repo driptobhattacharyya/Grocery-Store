@@ -1,36 +1,7 @@
-"""Background e-mail tasks (SMTP mocked) and the production config check."""
+"""The production config check (e-mail jobs are tested in test_email.py)."""
 import pytest
 
-import applications.backend_tasks as tasks
 from applications.config import DEV_SECRET_KEY, ConfigError, validate_config
-from applications.sandbox import bind_sandbox
-from helpers import APPLE, APPLE_PRICE, bearer
-
-
-@pytest.fixture
-def sent(monkeypatch):
-    messages = []
-    monkeypatch.setattr(tasks, "send_message", lambda to, subject, body: messages.append((to, subject, body)))
-    return messages
-
-
-def test_daily_reminder_emails_every_user(app, sandbox_id, sent):
-    with app.app_context():
-        bind_sandbox(sandbox_id)  # tasks run outside a request: name the sandbox explicitly
-        assert tasks.daily_reminder.run() == "OK"
-    assert sorted(to for to, _, _ in sent) == ["demo@grocery.app", "manager@grocery.app"]
-
-
-def test_monthly_report_includes_recent_spend(app, sandbox_id, client, shopper_token, sent):
-    client.post("/api/add_to_cart", json={"product_id": APPLE, "quantity": 2}, headers=bearer(shopper_token))
-    assert client.post("/api/shopping_cart/checkout", headers=bearer(shopper_token)).status_code == 200
-    with app.app_context():
-        bind_sandbox(sandbox_id)
-        assert tasks.monthly_report.run() == "OK"
-    bodies = {to: body for to, _, body in sent}
-    # orders.total_price is NUMERIC, so 360.0 is stored (and rendered) as 360.
-    assert f"a total of {int(2 * APPLE_PRICE)} INR" in bodies["demo@grocery.app"]
-    assert "a total of 0 INR" in bodies["manager@grocery.app"]
 
 
 # --- validate_config (in-process; the subprocess tests are in test_infra.py) ---------

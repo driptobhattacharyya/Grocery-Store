@@ -17,6 +17,7 @@ from applications.http_errors import (
     BadRequest, NotFound, api_errors, json_body, number, only_ok, optional_date,
     positive_int, require_str,
 )
+from applications.jobs_routes import enqueue_order_confirmation
 from applications.login_manager import (
     login, normalize_email, register_user, validate_email, validate_phone_number,
 )
@@ -116,6 +117,7 @@ def checkout():
     # anything the client sends in the body is ignored.
     order_id, items, total = checkout_cart(get_jwt_identity())
     cache.clear()
+    enqueue_order_confirmation(order_id)  # no-op without a visitor e-mail; never fails the checkout
     return jsonify({
         "success": "Checkout successful",
         "order_id": order_id,

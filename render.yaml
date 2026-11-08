@@ -19,3 +19,22 @@ services:
       # Render puts one proxy in front of the service.
       - key: TRUSTED_PROXY_COUNT
         value: "1"
+      # --- E-mail (Resend over HTTPS; unset = preview mode, nothing is sent) ---
+      - key: RESEND_API_KEY
+        sync: false   # set in the Render dashboard
+      - key: EMAIL_FROM
+        value: "Grocery Store Demo <demo@mail.driptobhattacharyya.com>"
+      - key: CORS_ORIGINS
+        value: https://grocery-store.driptobhattacharyya.com
+      # Broker for the Celery worker that runs inside the same container.
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: grocery-store-redis
+          property: connectionString
+
+  # Free Key Value (Redis-compatible): Celery broker, shared cache and e-mail counters.
+  - type: keyvalue
+    name: grocery-store-redis
+    plan: free
+    ipAllowList: []   # empty = internal (private network) access only

@@ -61,7 +61,13 @@ If the Render URL changes, update `connect-src` in `frontend/public/_headers`, t
    - `RESEND_API_KEY` to that key
    - `EMAIL_FROM` to `Grocery Store Demo <demo@mail.driptobhattacharyya.com>`
 
-> **Known gap:** the current backend does not read `RESEND_API_KEY` or `EMAIL_FROM`. `applications/mail_service.py` sends through SMTP using `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` and `SENDER_EMAIL`. Until the code is changed, these steps do not enable e-mail. Check the code before relying on them.
+Without `RESEND_API_KEY` the app runs in **preview mode**: e-mails are rendered and stored in the sandbox outbox, and nothing is sent. Jobs then end in status `preview`.
+
+Delivery uses Resend's HTTPS API (Render's free tier blocks outbound SMTP). Daily limits: 5 e-mails per recipient, 10 per client IP, and `EMAIL_DAILY_CAP` (default 80) in total. They are shared by all sandboxes. `EMAIL_ENABLED=false` is a kill switch: jobs fail with "e-mail disabled".
+
+### Background jobs (Celery)
+
+`render.yaml` creates a free Key Value instance and passes its internal connection string as `REDIS_URL`. With `REDIS_URL` set, the container's CMD (`supervisor.py`) runs gunicorn and one Celery worker (solo pool, concurrency 1). If either process dies, the container exits and Render restarts it. Without `REDIS_URL`, no worker starts and jobs run on a thread inside gunicorn. There is no Celery beat schedule: nothing runs periodically.
 
 ## 4. Optional keep-warm
 
