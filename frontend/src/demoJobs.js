@@ -13,7 +13,13 @@ export const jobs = reactive({
   messages: [],
   loaded: false,
   error: "",
+  /** Polling gave up after POLL_CAP_MS; the visitor can refresh by hand. */
+  pollStopped: false,
 });
+
+const POLL_INTERVAL_MS = 2000;
+export const POLL_CAP_MS = 3 * 60 * 1000;
+let pollStart = 0;
 
 export function resetJobs() {
   stopPolling();
@@ -23,6 +29,7 @@ export function resetJobs() {
   jobs.messages = [];
   jobs.loaded = false;
   jobs.error = "";
+  jobs.pollStopped = false;
 }
 
 export const hasActiveJobs = () => jobs.list.some((job) => ACTIVE.includes(job.status));
@@ -65,18 +72,35 @@ let timer = null;
 function stopPolling() {
   clearTimeout(timer);
   timer = null;
+  pollStart = 0;
+}
+
+/** Manual refresh: starts a fresh polling window. */
+export function refreshJobs() {
+  pollStart = 0;
+  jobs.pollStopped = false;
+  loadOutbox();
+  return loadJobs();
 }
 
 /** (Re)starts or stops the poll depending on the jobs we currently know. */
 export function syncPolling() {
   if (demo.drawer === "jobs" && hasActiveJobs()) {
-    if (!timer) {
+    if (!pollStart) pollStart = Date.now();
+    if (Date.now() - pollStart >= POLL_CAP_MS) {
+      // Stuck job (or a very slow worker): stop hammering the server.
+      jobs.pollStopped = true;
+      clearTimeout(timer);
+      timer = null;
+    } else if (!timer) {
+      jobs.pollStopped = false;
       timer = setTimeout(() => {
         timer = null;
         loadJobs();
-      }, 2000);
+      }, POLL_INTERVAL_MS);
     }
   } else {
+    jobs.pollStopped = false;
     stopPolling();
   }
 }
@@ -85,6 +109,8 @@ watch(
   () => demo.drawer,
   (drawer) => {
     if (drawer === "jobs") {
+      pollStart = 0;
+      jobs.pollStopped = false;
       loadJobs();
       loadOutbox();
     } else {
@@ -108,6 +134,8 @@ export async function saveEmail(email, turnstileToken) {
 
 export async function enqueue(kind) {
   const response = await axios.post("/api/demo/jobs", { kind });
+  pollStart = 0; // a new job gets a full polling window
+  jobs.pollStopped = false;
   await loadJobs();
   return response.data.job;
 }

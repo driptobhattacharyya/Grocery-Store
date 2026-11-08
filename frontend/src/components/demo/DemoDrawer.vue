@@ -5,6 +5,7 @@
         <h2 class="demo-drawer-title">{{ title }}</h2>
         <button type="button" class="btn-close" aria-label="Close panel" @click="$emit('close')"></button>
       </header>
+      <ResetNotice v-if="demo.full" class="m-2" />
       <div class="demo-drawer-body">
         <slot />
       </div>
@@ -13,7 +14,14 @@
 </template>
 
 <script>
+import ResetNotice from "./ResetNotice.vue";
+import { demo } from "@/demo";
+
 export default {
+  components: { ResetNotice },
+  data() {
+    return { demo };
+  },
   props: { open: Boolean, title: String },
   emits: ["close"],
   watch: {

@@ -285,3 +285,32 @@
 .cred-table code { color: #17261e; }
 .landing a { color: var(--demo-green); }
 .landing .btn-success { color: #fff; }
+
+/* ---- sandbox full / rate limit / truncation ------------------------------- */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #842029;
+  color: #fff;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+}
+.demo-banner .reset-notice { flex: 1; }
+.reset-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+.demo-drawer .reset-notice {
+  background: #f8d7da;
+  color: #58151c;
+  border: 1px solid #f1aeb5;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+}
+.field-error { color: #b02a37; font-size: 0.8rem; text-align: left; }
+.job-detail.is-failed { color: #b02a37 !important; }
+.outbox-truncated { color: #8a6d00; }

@@ -3,7 +3,7 @@
 // highlights that fade after a few seconds.
 import { reactive, watch } from "vue";
 import axios from "axios";
-import { demo, errorText } from "./demo";
+import { cooldownLeft, demo, errorText } from "./demo";
 
 const HIGHLIGHT_MS = 6000;
 
@@ -150,9 +150,11 @@ watch(
   }
 );
 
+export const SQL_PATH = "/api/demo/sql";
+
 export async function runSql() {
   const sql = sqlConsole.text.trim();
-  if (!sql || sqlConsole.running) return;
+  if (!sql || sqlConsole.running || cooldownLeft(SQL_PATH) > 0) return;
   sqlConsole.running = true;
   sqlConsole.error = "";
   try {

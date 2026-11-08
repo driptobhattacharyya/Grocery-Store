@@ -59,6 +59,16 @@ export const demo = reactive({
   dbDirty: false,
   /** Bumped when a new sandbox starts, so panels drop their cached data. */
   sandboxEpoch: 0,
+  /** "Please try that again" note after a non-GET call hit a sleeping server. */
+  wakeNote: "",
+  /** Message while the sandbox is full (507): drives the global banner. */
+  full: "",
+  /** Bumped by anything that wants the toolbar's "Reset demo" dialog opened. */
+  resetRequest: 0,
+  /** Clock for countdowns; only ticks while a cooldown is running. */
+  now: Date.now(),
+  /** { [key]: epoch ms until which the action is rate-limited } */
+  cooldowns: {},
   /** Changing it remounts the routed page (fresh sandbox, or same-route role switch). */
   viewKey: 0,
 });
@@ -67,6 +77,52 @@ export function noteMutation() {
   demo.mutations += 1;
   if (demo.drawer !== "db") demo.dbDirty = true;
 }
+
+// --- rate-limit cooldowns -----------------------------------------------------
+
+let cooldownTimer = null;
+
+/** Disables the action `key` (an API path) for `seconds`. */
+export function startCooldown(key, seconds) {
+  const secs = Math.max(1, Math.min(Math.ceil(Number(seconds) || 0), 3600));
+  demo.now = Date.now();
+  demo.cooldowns = { ...demo.cooldowns, [key]: demo.now + secs * 1000 };
+  if (cooldownTimer) return;
+  cooldownTimer = setInterval(() => {
+    demo.now = Date.now();
+    const live = Object.entries(demo.cooldowns).filter(([, until]) => until > demo.now);
+    if (live.length !== Object.keys(demo.cooldowns).length) demo.cooldowns = Object.fromEntries(live);
+    if (!live.length) {
+      clearInterval(cooldownTimer);
+      cooldownTimer = null;
+    }
+  }, 250);
+}
+
+/** Whole seconds left on the cooldown for `key` (0 when none). Reactive. */
+export function cooldownLeft(key) {
+  const until = demo.cooldowns[key];
+  return until ? Math.max(0, Math.ceil((until - demo.now) / 1000)) : 0;
+}
+
+/** Seconds to wait according to a 429 error (body `retry_after`, else Retry-After header). */
+export function retryAfterOf(error) {
+  const res = error && error.response;
+  if (!res) return 0;
+  const fromBody = Number(res.data && res.data.retry_after);
+  const header = res.headers && (typeof res.headers.get === "function" ? res.headers.get("retry-after") : res.headers["retry-after"]);
+  const fromHeader = Number(header);
+  const value = fromBody > 0 ? fromBody : fromHeader > 0 ? fromHeader : 0;
+  return value ? Math.ceil(value) : 0;
+}
+
+export function isSandboxFull(error) {
+  const res = error && error.response;
+  return Boolean(res && (res.status === 507 || (res.data && res.data.code === "sandbox_full")));
+}
+
+export const WOKE_MESSAGE = "The server was asleep and is waking up. Please try that again in a moment.";
+export const FULL_MESSAGE = "This demo sandbox is full. Reset the demo to start fresh.";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -118,10 +174,15 @@ export async function ensureReady() {
 // --- session ------------------------------------------------------------------
 
 export function errorText(error, fallback = "Something went wrong. Please try again.") {
+  if (error && error.wakeMessage) return error.wakeMessage;
   if (error && error.response) {
     const data = error.response.data;
+    if (error.response.status === 429) {
+      const wait = retryAfterOf(error);
+      return wait ? `Too many requests. Try again in ${wait} s` : "Too many requests. Please wait a bit and try again.";
+    }
+    if (isSandboxFull(error)) return (data && data.error) || FULL_MESSAGE;
     if (data && typeof data.error === "string") return data.error;
-    if (error.response.status === 429) return "Too many requests. Please wait a bit and try again.";
     return `${fallback} (HTTP ${error.response.status})`;
   }
   return "Could not reach the demo server. If it is waking up, give it a minute and try again.";
@@ -151,6 +212,8 @@ export function applySession(data, { fresh = false } = {}) {
     demo.emails = [];
     write(EMAILS_KEY, null);
     demo.dbDirty = false;
+    demo.full = "";
+    demo.cooldowns = {};
     demo.sandboxEpoch += 1;
     demo.viewKey += 1;
   }
@@ -210,6 +273,8 @@ export function endSession(message = "") {
   demo.drawer = null;
   demo.dbDirty = false;
   demo.sandboxEpoch += 1;
+  demo.full = "";
+  demo.cooldowns = {};
   demo.notice = message;
   demo.version += 1;
 }

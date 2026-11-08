@@ -15,6 +15,10 @@
       </template>
     </div>
   </transition>
+  <div v-if="demo.wakeNote" class="server-pill ready wake-note" role="alert" data-testid="wake-note" style="bottom: 3.5rem">
+    <span>{{ demo.wakeNote }}</span>
+    <button type="button" @click="demo.wakeNote = ''">OK</button>
+  </div>
 </template>
 
 <script>
@@ -30,6 +34,10 @@ export default {
     },
   },
   watch: {
+    "demo.wakeNote"(note) {
+      clearTimeout(this.noteTimer);
+      if (note) this.noteTimer = setTimeout(() => (this.demo.wakeNote = ""), 10000);
+    },
     "demo.server"(state, previous) {
       clearTimeout(this.timer);
       if (state === "ready" && previous !== "ready") {
@@ -42,6 +50,7 @@ export default {
   },
   beforeUnmount() {
     clearTimeout(this.timer);
+    clearTimeout(this.noteTimer);
   },
   methods: {
     retry() {
