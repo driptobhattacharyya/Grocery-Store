@@ -69,7 +69,7 @@ app.teardown_appcontext(close_db)
 limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"])
 
 if app.config["DEMO_MODE"]:
-    sandbox.init_sandboxes(app)  # template DB + sandbox registry; no single shared DB
+    sandbox.init_sandboxes(app, passive=app.config["PROCESS_ROLE"] == "worker")  # template DB + sandbox registry; no single shared DB
 else:
     init_db(app)
 
@@ -132,20 +132,12 @@ def _stale_token(jwt_header, jwt_payload):
     return jsonify({"error": "Session is no longer valid, please log in again"}), 401
 
 
-# Background jobs (daily reminder + monthly report e-mails). Only active when
-# a Celery worker/beat is running against Redis; the web app works without it.
+# Background e-mail jobs (see applications/backend_tasks.py). With REDIS_URL they go
+# through a Celery worker (`celery -A app:celery_app worker`, started by supervisor.py);
+# without it they run on an in-process thread. There is no periodic (beat) schedule:
+# the old "e-mail every registered user" jobs do not fit a sandboxed public demo.
 celery_app = celery_init_app(app)
-
-from celery.schedules import crontab  # noqa: E402
-from applications.backend_tasks import daily_reminder, monthly_report  # noqa: E402
-
-
-@celery_app.on_after_finalize.connect
-def setup_periodic_tasks(sender, **kwargs):
-    sender.add_periodic_task(crontab(hour=22, minute=20), daily_reminder.s(), name="daily reminder")
-    sender.add_periodic_task(
-        crontab(day_of_month="28", hour=22, minute=20), monthly_report.s(), name="monthly usage"
-    )
+import applications.backend_tasks  # noqa: E402,F401  (registers the Celery task)
 
 
 # The route modules register themselves on `current_app` at import time.
@@ -153,6 +145,7 @@ with app.app_context():
     import applications.controllers  # noqa: E402,F401
     import applications.manager_controller  # noqa: E402,F401
     import applications.demo_routes  # noqa: E402,F401
+    import applications.jobs_routes  # noqa: E402,F401
 
 
 # --- Rate limiting of credential endpoints ---------------------------------------
@@ -164,6 +157,8 @@ for _endpoint, _limit in (
     ("signup_route", app.config["AUTH_RATE_LIMIT"]),
     ("demo_session", app.config["DEMO_SESSION_RATE_LIMIT"]),
     ("demo_sql", app.config["DEMO_SQL_RATE_LIMIT"]),
+    ("demo_email", app.config["DEMO_EMAIL_RATE_LIMIT"]),
+    ("demo_jobs_create", app.config["DEMO_JOBS_RATE_LIMIT"]),
 ):
     app.view_functions[_endpoint] = limiter.limit(_limit)(app.view_functions[_endpoint])
 

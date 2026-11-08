@@ -105,6 +105,27 @@ class Config:
     # Not needed when the frontend is served by Flask itself (the default).
     CORS_ORIGINS = [o.strip() for o in _env("CORS_ORIGINS", "").split(",") if o.strip()]
 
+    # --- E-mail and background jobs (see docs/DEMO_CONTRACT.md) -----------------------
+    # Delivery: Resend over HTTPS when RESEND_API_KEY is set; otherwise "preview"
+    # (rendered and stored in the sandbox outbox, nothing sent). EMAIL_BACKEND=smtp
+    # is an explicit opt-in for local MailHog. EMAIL_ENABLED=false is a kill switch.
+    EMAIL_ENABLED = _env_bool("EMAIL_ENABLED", True)
+    EMAIL_BACKEND = _env("EMAIL_BACKEND", "").lower()
+    RESEND_API_KEY = _env("RESEND_API_KEY")
+    EMAIL_FROM = _env("EMAIL_FROM", "Grocery Store Demo <demo@mail.driptobhattacharyya.com>")
+    # Limits per UTC day, counted when a job is enqueued and shared by all sandboxes.
+    EMAIL_RECIPIENT_DAILY_LIMIT = _env_int("EMAIL_RECIPIENT_DAILY_LIMIT", 5)
+    EMAIL_IP_DAILY_LIMIT = _env_int("EMAIL_IP_DAILY_LIMIT", 10)
+    EMAIL_DAILY_CAP = _env_int("EMAIL_DAILY_CAP", 80)
+    TURNSTILE_SECRET_KEY = _env("TURNSTILE_SECRET_KEY")
+    DEMO_EMAIL_RATE_LIMIT = _env("DEMO_EMAIL_RATE_LIMIT", "20 per hour")
+    DEMO_JOBS_RATE_LIMIT = _env("DEMO_JOBS_RATE_LIMIT", "30 per hour")
+    # How jobs run: "celery" (worker + REDIS_URL broker; the default with REDIS_URL),
+    # "thread" (in-process thread, the default without REDIS_URL) or "inline" (tests).
+    JOBS_EXECUTION = _env("JOBS_EXECUTION", "celery" if REDIS_URL else "thread").lower()
+    # "web" or "worker": the Celery worker must not rebuild the template or delete sandboxes.
+    PROCESS_ROLE = _env("PROCESS_ROLE", "web").lower()
+
     # Built Vue app served by Flask in production
     FRONTEND_DIST = _env("FRONTEND_DIST", os.path.join(BASE_DIR, "frontend", "dist"))
 

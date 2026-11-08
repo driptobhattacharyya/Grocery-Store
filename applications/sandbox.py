@@ -77,12 +77,16 @@ def _file_mtime(path):
 
 
 class SandboxStore:
-    def __init__(self, directory, template_path, ttl_seconds, max_count, busy_timeout=15.0):
+    def __init__(self, directory, template_path, ttl_seconds, max_count, busy_timeout=15.0, passive=False):
         self.directory = os.path.abspath(directory)
         self.template_path = os.path.abspath(template_path)
         self.ttl = ttl_seconds
         self.max = max(1, int(max_count))
         self.busy_timeout = busy_timeout
+        # A passive store (the Celery worker, a second process sharing the directory) never
+        # deletes or evicts files and judges expiry by file mtime alone: the web process
+        # owns the lifecycle, and its in-memory activity times are invisible here.
+        self.passive = passive
         self._lock = threading.RLock()
         self._last_used = OrderedDict()  # sandbox_id -> wall-clock time, LRU first
         self._last_cleanup = 0.0
@@ -98,6 +102,8 @@ class SandboxStore:
 
     # --- registry ---------------------------------------------------------------
     def _adopt_existing(self):
+        if self.passive:
+            return
         now = time.time()
         found = []
         for entry in os.listdir(self.directory):
@@ -126,6 +132,8 @@ class SandboxStore:
 
     def cleanup(self, now=None):
         """Drop every expired sandbox."""
+        if self.passive:
+            return
         now = now or time.time()
         with self._lock:
             self._last_cleanup = now
@@ -180,7 +188,7 @@ class SandboxStore:
         with self._lock:
             now = time.time()
             self._maybe_cleanup(now)
-            last = self._last_used.get(sandbox_id)
+            last = None if self.passive else self._last_used.get(sandbox_id)
             if last is None:
                 # Not in this process's registry; adopt a file left on disk.
                 mtime = _file_mtime(path)
@@ -188,14 +196,17 @@ class SandboxStore:
                     return None
                 last = mtime
             if self._expired(last, now):
+                if self.passive:
+                    return None
                 self._last_used.pop(sandbox_id, None)
                 _remove_files(path)
                 return None
             if not os.path.exists(path):
                 self._last_used.pop(sandbox_id, None)
                 return None
-            self._last_used[sandbox_id] = now
-            self._last_used.move_to_end(sandbox_id)
+            if not self.passive:
+                self._last_used[sandbox_id] = now
+                self._last_used.move_to_end(sandbox_id)
             return path
 
     def delete(self, sandbox_id):
@@ -241,12 +252,13 @@ def build_template(app):
     return template
 
 
-def init_sandboxes(app):
-    """Build the template and the store (demo mode only)."""
-    template = build_template(app)
+def init_sandboxes(app, passive=False):
+    """Build the template and the store (demo mode only). ``passive`` is for the Celery
+    worker: it reuses the web process's template and never deletes sandboxes."""
+    template = os.path.abspath(app.config["TEMPLATE_DB_PATH"]) if passive else build_template(app)
     store = SandboxStore(
         app.config["SANDBOX_DIR"], template, app.config["SANDBOX_TTL_MINUTES"] * 60,
-        app.config["SANDBOX_MAX"], app.config["SQLITE_BUSY_TIMEOUT"],
+        app.config["SANDBOX_MAX"], app.config["SQLITE_BUSY_TIMEOUT"], passive=passive,
     )
     app.extensions["sandbox_store"] = store
     log.info("Demo mode: template %s, sandboxes in %s (ttl %.0f min, max %d)",

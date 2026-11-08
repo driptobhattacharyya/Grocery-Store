@@ -34,7 +34,9 @@ _TMP = tempfile.mkdtemp(prefix="grocery-tests-")
 for _key in ("REDIS_URL", "CORS_ORIGINS", "CONTENT_SECURITY_POLICY", "SECRET_KEY", "JWT_SECRET_KEY",
              "ADMIN_USERNAME", "ADMIN_PASSWORD", "TRUSTED_PROXY_COUNT", "AUTH_RATE_LIMIT", "DEMO_MODE",
              "DEMO_ADMIN_PASSWORD", "SANDBOX_TTL_MINUTES", "SANDBOX_MAX", "TEMPLATE_DB_PATH",
-             "DEMO_SESSION_RATE_LIMIT", "DEMO_SQL_RATE_LIMIT"):
+             "DEMO_SESSION_RATE_LIMIT", "DEMO_SQL_RATE_LIMIT", "RESEND_API_KEY", "EMAIL_FROM", "EMAIL_ENABLED",
+             "EMAIL_BACKEND", "EMAIL_DAILY_CAP", "EMAIL_RECIPIENT_DAILY_LIMIT", "EMAIL_IP_DAILY_LIMIT",
+             "TURNSTILE_SECRET_KEY", "JOBS_EXECUTION", "PROCESS_ROLE", "CELERY_BROKER_URL"):
     os.environ.pop(_key, None)
 os.environ.update({
     "APP_ENV": "development",
@@ -46,6 +48,7 @@ os.environ.update({
     "RATELIMIT_STORAGE_URI": "memory://",
     "FRONTEND_DIST": os.path.join(_TMP, "no-frontend"),
     "LOG_LEVEL": "WARNING",
+    "JOBS_EXECUTION": "inline",  # e-mail jobs run synchronously and deterministically
 })
 
 from app import app as flask_app  # noqa: E402
@@ -77,6 +80,15 @@ def app():
     flask_app.config.update(TESTING=True)
     yield flask_app
     shutil.rmtree(_TMP, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_email_counters(app):
+    """E-mail limits are shared across sandboxes (and so across tests): start each test at zero."""
+    from applications.email_limits import get_counters
+
+    get_counters(app).reset()
+    yield
 
 
 @pytest.fixture
