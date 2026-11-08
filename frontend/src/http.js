@@ -92,7 +92,10 @@ export function installHttpInterceptors(instance = axios) {
             config.demoRetried = true;
             return instance.request(config);
           }
-          if (awake) error.wakeMessage = WOKE_MESSAGE;
+          if (awake) {
+            error.wakeMessage = WOKE_MESSAGE;
+            demo.wakeNote = WOKE_MESSAGE; // pages alert their own text, so also show it globally
+          }
           if (error.wakeMessage) error.message = error.wakeMessage;
         }
         return Promise.reject(error);

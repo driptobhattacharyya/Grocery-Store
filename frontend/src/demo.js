@@ -59,6 +59,8 @@ export const demo = reactive({
   dbDirty: false,
   /** Bumped when a new sandbox starts, so panels drop their cached data. */
   sandboxEpoch: 0,
+  /** "Please try that again" note after a non-GET call hit a sleeping server. */
+  wakeNote: "",
   /** Message while the sandbox is full (507): drives the global banner. */
   full: "",
   /** Bumped by anything that wants the toolbar's "Reset demo" dialog opened. */

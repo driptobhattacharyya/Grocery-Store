@@ -11,7 +11,7 @@
 //   MOCK_EMAIL_ENABLED=true  jobs end as "sent" instead of "preview"
 //   POST /__mock/expire      forget every sandbox (next call answers 410)
 //   POST /__mock/sleep?s=10  go back to "waking" for 10 s (503 on health)
-//   POST /__mock/offline?s=10  like a spun-down Render instance: every request
+//   POST /__mock/offline?s=10[&keep=1]  like a spun-down Render instance: every request
 //                            (health included) is dropped at the network level
 //                            for 10 s, then the instance is back with NO
 //                            sandboxes (the next sandboxed call answers 410)
@@ -182,7 +182,7 @@ export default function demoMockPlugin(env = {}) {
 
     if (path === "/__mock/offline") {
       offlineUntil = Date.now() + Number(url.searchParams.get("s") || 10) * 1000;
-      sandboxes.clear(); // the instance restarts: the sandboxes are gone
+      if (!url.searchParams.get("keep")) sandboxes.clear(); // the instance restarts: the sandboxes are gone
       return send(res, 200, { ok: true });
     }
     if (path === "/__mock/fail") {
