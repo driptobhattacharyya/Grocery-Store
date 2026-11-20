@@ -116,7 +116,14 @@ jobs:
       - name: Smoke test
         run: |
           curl -fsS http://127.0.0.1:8000/api/health
-          curl -fsS http://127.0.0.1:8000/api/getCategories > /dev/null
+          # Demo mode: every sandboxed endpoint needs a session's X-Sandbox-Id.
+          session=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d '{"role":"user"}' http://127.0.0.1:8000/api/demo/session)
+          sid=$(printf '%s' "$session" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sandbox_id"])')
+          curl -fsS -H "X-Sandbox-Id: $sid" http://127.0.0.1:8000/api/getCategories > /dev/null
+          curl -fsS -H "X-Sandbox-Id: $sid" http://127.0.0.1:8000/api/demo/db > /dev/null
+          # Without a sandbox, sandboxed endpoints answer 410.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/getCategories)" = 410
           # The built frontend is served for client-side routes.
           curl -fsS http://127.0.0.1:8000/login | grep -qi '<div id="app"'
           # Security headers, including HSTS in production.
