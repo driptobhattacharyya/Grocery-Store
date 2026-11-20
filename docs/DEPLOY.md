@@ -126,3 +126,15 @@ Run these against the live site after each deploy:
 - [ ] The SQL console runs a query.
 - [ ] Jobs appear and run.
 - [ ] E-mail: a job sends a message, and the e-mail preview shows it.
+
+## Frontend deploys via GitHub Actions
+
+`.github/workflows/deploy-frontend.yml` builds `frontend/` and deploys it to the Worker. It runs on pushes to `main` that touch `frontend/`, and can be started by hand.
+
+One-time setup in the GitHub repo, under **Settings → Secrets and variables → Actions**:
+
+- Secret `CLOUDFLARE_API_TOKEN`: the API token from section 2 (Account › Workers Scripts › Edit, and Zone › Workers Routes › Edit on `driptobhattacharyya.com`).
+- Variable `CLOUDFLARE_ACCOUNT_ID` (optional): defaults to the account ID in the workflow.
+- Optional variables `VITE_API_BASE_URL` (defaults to the live Render URL) and `VITE_TURNSTILE_SITE_KEY`.
+
+After that, every push to `main` that touches `frontend/` deploys. To deploy without a push, open the **Actions** tab, choose **Deploy frontend**, and click **Run workflow**.
