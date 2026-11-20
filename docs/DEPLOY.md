@@ -48,7 +48,7 @@ CLOUDFLARE_ACCOUNT_ID=<account-id> npx wrangler deploy
 
 `wrangler.jsonc` is an assets-only Worker: there is no Worker script. It serves `dist/` and attaches the custom domain.
 
-If the Render URL changes, update `connect-src` in `frontend/public/_headers`, then rebuild and redeploy.
+The live backend is `https://grocery-store-3es2.onrender.com`, pinned as the only API origin in `connect-src`. If the Render URL changes, update `connect-src` in `frontend/public/_headers`, then rebuild and redeploy.
 
 ## 3. E-mail (Resend)
 
